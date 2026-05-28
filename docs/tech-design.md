@@ -564,23 +564,93 @@ src/
 
 ---
 
-## 18. Recommended build sequence
+## 18. Roadmap (interleaved, pixels-first)
 
-Each step is independently testable before the next.
+The same pieces as a bottom-up build, reordered into **vertical slices**: get a
+static grid on screen fast, then walk up and down the stack so progress shows
+across the board and usability problems surface early. Two rules set the order:
+**(1)** get pixels — and an n-D capability — visible as soon as possible;
+**(2)** don't perfect the UX (copy/paste, navigation niceties, axis management)
+before formulas exist. Until **M6** the document lives **in memory on the main
+thread** — a deliberate placeholder; the end-state is still the worker-owned
+truth of §11, migrated in one move once the slice works. "Placeholder" below
+means a simplified stand-in (direct mutation, uniform sizes, the doc used as its
+own cache) that a later milestone replaces with the real §-spec.
 
 ```
-1 scaffold + tooling (Vite/Svelte/TS, Vitest, Playwright, tsconfig boundary)
-2 engine core      coord/codec → lex → parse → resolve → eval   (unit: worked-example formulas)
-3 depgraph         edges (single + range descriptor) → topo recompute → cycle detect
-4 fibers           coverage, read resolution, create-time invariants
-5 model            document + ops + invert + undo log + §3 reference adjustment
-6 worker boundary  Comlink WorkerApi + SliceCache + optimistic apply/reconcile
-7 renderer         windowing, draw layers, hit-test, editor overlay, keyboard nav, selection
-8 chrome           formula bar (elision), axis panel, navigators (slider, cell-as-dropdown), fiber dialog
-9 persistence      idb schema, debounced save, saved indicator, recompute-on-load
-10 interaction      copy/paste w/ $-adjustment, constant fill, insert-by-click
-11 e2e              window test API; walk every acceptance criterion
+layer \ milestone   M0  M1  M2  M3  M4  M5  M6  M7  M8  M9  M10
+UI chrome            ·   ·   ●   ●   ●   ●   ·   ·   ·   ●   ◇
+Grid renderer        ·   ●   ●   ●   ·   ·   ·   ·   ·   ●   ◇
+Engine / Model       ●   ·   ●   ·   ●   ●   ●   ●   ·   ·   ◇
+Worker / Persist     ·   ·   ·   ·   ·   ·   ·   ●   ●   ·   ◇
+
+● primary build   ◇ exercised by e2e   · untouched
+headlines:  M1 first pixels · M3–M4 n-D features (navigate, literal fibers) · M5 formulas live
 ```
+
+The `●` cluster zig-zags — bottom (M0) → up to the renderer (M1) → up to chrome
+(M2–M3) → down to engine + chrome for the two n-D features and formulas (M4–M6) →
+down to the worker/store (M7–M8) → up to chrome/grid (M9). Each milestone ends in
+something runnable to demo.
+
+**M0 — Types (abstract).** Scaffold (Vite/Svelte/TS, Vitest, Playwright, the
+`engine/` tsconfig boundary). Core types of §2 + the `CellKey` encoding and
+axis-letter codec (§4). No pixels yet; the only purely-abstract phase.
+
+**M1 — A grid with one value (first pixels).** In-memory 2-axis seed document;
+canvas renderer (windowing, cells, gridlines, frozen gutters, HiDPI) reading the
+doc directly — `SliceCache` is the doc itself (placeholder), cell sizes uniform
+(placeholder). *Demo: a grid with n-D coordinate gutters and one literal showing.*
+
+**M2 — Edit literals (full vertical slice).** DOM editor overlay, click-select,
+type/`F2` to edit, Enter/Esc; formula bar mirrors the active cell (literals only).
+`SetCell` as a direct in-memory write (placeholder for the §10 op/undo system).
+*Demo: a usable 2-D sheet of literals.*
+
+**M3 — Navigate a third dimension (first n-D feature).** Add a 3rd+ axis to the
+seed; generalize projection to n-D (§12); `AxisBindingControl` to pick row/col
+axes and a `Slider` navigator for hidden axes; active cell follows the screen.
+*Demo: rebind axes and drag a slider to watch the slice change — the first
+distinctly-maimadion thing on screen.*
+
+**M4 — Literal fibers (second n-D feature).** A `Flat` whose `input` is a literal
+— most of §9 without needing the engine: the `pins`/`free` representation,
+order-free read resolution (explicit → fiber → empty) folded into the placeholder
+`read(coord)`, create-time invariants (no fiber/fiber or fiber/explicit overlap,
+absorb-on-overwrite), and the `FiberDialog`. This is the heading/label use a fiber
+is mostly for — a value typed once and held constant across a whole axis. *Demo:
+define a heading constant across a dimension; edit any member and the whole fiber
+updates.*
+
+**M5 — Formulas (substrate, surfaced at once).** Engine core: lex → parse →
+resolve → eval (§§4–7); then depgraph + topo recompute + cycle detect (§8).
+`SetCell` routes `=` inputs through the engine; formula bar shows source with
+elision (§6). *Demo: references, `SUM` over a 1-D range, recompute on edit,
+`#CYCLE!` — the worked-example formulas evaluate.*
+
+**M6 — Fibers complete.** The remainder of §9 now that the engine exists: a fiber
+`input` may itself be a formula, and fibers participate as depgraph nodes so
+editing a fiber recomputes its dependents. *Demo: a formula-valued fiber; a
+formula that reads a fibered cell recomputes when the fiber changes.*
+
+**M7 — Worker + ops + undo (architectural hardening).** Formalize edits as the
+discrete `Op` set with `invert` + undo log + §3 reference adjustment (§10),
+replacing the M2 placeholder writes; then move truth behind the worker: Comlink
+`WorkerApi`, the real `SliceCache`, optimistic apply/reconcile (§11). *Demo:
+unchanged behavior + undo/redo; heavy state off the UI thread, large sheets stay
+smooth.*
+
+**M8 — Persistence.** IndexedDB (`idb`) schema, debounced save, saved indicator,
+recompute-on-load (§15). *Demo: close and reopen; the sheet is restored.*
+
+**M9 — Full UX baseline.** The deferred niceties, now that the substrate is real:
+copy/paste with `$`-adjustment, constant + slider-drag fill, insert-by-click
+(§16); axis/position management panel with structural adjustment (§§3, 14); the
+cell-as-dropdown navigator (the second v1 navigator, intentionally late); header
+resize and fill-handle overlay (§13). *Demo: the v1 interaction set.*
+
+**M10 — e2e + acceptance.** Window test API; drive Playwright through every
+acceptance criterion (§19).
 
 ---
 

@@ -16,6 +16,11 @@ rather than dictated by the user, it is marked _(proposed)_.
   policy limit is imposed.
 - Each **Axis** has a stable identity (independent of its name) and an ordered
   list of **positions**. Positions are addressed by 1-based index.
+- **Axis/position management** happens through lightweight in-app UI (a panel or
+  dialog, not a browser `prompt`). Axes can be created, renamed, and deleted but
+  **not reordered**. Positions can be added and deleted; structural edits adjust
+  references as in established spreadsheets (deleting a referenced position
+  yields `#REF!`). A position's label is ordinary cell data.
 - A **Coordinate** is one position per axis; it identifies exactly one cell.
 - A **Cell** holds exactly one of: empty, a literal (number or text), or a
   formula. A formula may evaluate to a value or to an error.

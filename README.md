@@ -7,11 +7,13 @@ navigate the rest.
 
 ## Status
 
-**Planning complete; technology selected; pre-implementation.** Requirements
-and conceptual design are settled, and the stack is chosen — a Web SPA with a
-Canvas 2D grid and a TypeScript (Rust-ready) formula engine; see
-[`docs/technology.md`](docs/technology.md). A few non-blocking product
-questions remain open in [`docs/open-questions.md`](docs/open-questions.md).
+**Technical design complete; pre-implementation.** Requirements and conceptual
+design are settled, the stack is chosen — a Web SPA with a Canvas 2D grid and a
+TypeScript (Rust-ready) formula engine; see
+[`docs/technology.md`](docs/technology.md) — and the engineering design that
+bridges the stack to code is written in
+[`docs/tech-design.md`](docs/tech-design.md). A single minor pick remains open
+in [`docs/open-questions.md`](docs/open-questions.md).
 
 ## Documents
 
@@ -21,6 +23,7 @@ questions remain open in [`docs/open-questions.md`](docs/open-questions.md).
 | [`docs/design.md`](docs/design.md) | Conceptual model and architecture: entities, addressing, ranges, fibers, viewport, navigation, evaluation, persistence |
 | [`docs/worked-example.md`](docs/worked-example.md) | A monthly-budget workbook worked through the model end-to-end, validating it against real data |
 | [`docs/technology.md`](docs/technology.md) | Technology evaluation: the chosen stack (Web SPA, Canvas 2D grid, TypeScript engine), rationale, and rejected alternatives |
+| [`docs/tech-design.md`](docs/tech-design.md) | Technical design: concrete types, operation set, worker RPC contract, parser/AST, eval & depgraph algorithms, fiber/coordinate encoding, persistence schema, renderer architecture, build sequence |
 | [`docs/open-questions.md`](docs/open-questions.md) | Decisions deferred to technology evaluation, and remaining product questions |
 
 ## The one-paragraph mental model

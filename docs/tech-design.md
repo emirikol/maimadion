@@ -578,19 +578,20 @@ means a simplified stand-in (direct mutation, uniform sizes, the doc used as its
 own cache) that a later milestone replaces with the real §-spec.
 
 ```
-layer \ milestone   M0  M1  M2  M3  M4  M5  M6  M7  M8  M9
-UI chrome            ·   ·   ●   ●   ●   ●   ·   ·   ●   ◇
-Grid renderer        ·   ●   ●   ●   ·   ·   ·   ·   ●   ◇
-Engine / Model       ●   ·   ●   ·   ●   ●   ●   ·   ·   ◇
-Worker / Persist     ·   ·   ·   ·   ·   ·   ●   ●   ·   ◇
+layer \ milestone   M0  M1  M2  M3  M4  M5  M6  M7  M8  M9  M10
+UI chrome            ·   ·   ●   ●   ●   ●   ·   ·   ·   ●   ◇
+Grid renderer        ·   ●   ●   ●   ·   ·   ·   ·   ·   ●   ◇
+Engine / Model       ●   ·   ●   ·   ●   ●   ●   ●   ·   ·   ◇
+Worker / Persist     ·   ·   ·   ·   ·   ·   ·   ●   ●   ·   ◇
 
 ● primary build   ◇ exercised by e2e   · untouched
-headlines:  M1 first pixels · M3 first n-D feature · M4 formulas live
+headlines:  M1 first pixels · M3–M4 n-D features (navigate, literal fibers) · M5 formulas live
 ```
 
 The `●` cluster zig-zags — bottom (M0) → up to the renderer (M1) → up to chrome
-(M2–M3) → back down to the engine (M4–M5) → down to the worker/store (M6–M7) →
-up to chrome/grid (M8). Each milestone ends in something runnable to demo.
+(M2–M3) → down to engine + chrome for the two n-D features and formulas (M4–M6) →
+down to the worker/store (M7–M8) → up to chrome/grid (M9). Each milestone ends in
+something runnable to demo.
 
 **M0 — Types (abstract).** Scaffold (Vite/Svelte/TS, Vitest, Playwright, the
 `engine/` tsconfig boundary). Core types of §2 + the `CellKey` encoding and
@@ -612,34 +613,43 @@ axes and a `Slider` navigator for hidden axes; active cell follows the screen.
 *Demo: rebind axes and drag a slider to watch the slice change — the first
 distinctly-maimadion thing on screen.*
 
-**M4 — Formulas (substrate, surfaced at once).** Engine core: lex → parse →
+**M4 — Literal fibers (second n-D feature).** A `Flat` whose `input` is a literal
+— most of §9 without needing the engine: the `pins`/`free` representation,
+order-free read resolution (explicit → fiber → empty) folded into the placeholder
+`read(coord)`, create-time invariants (no fiber/fiber or fiber/explicit overlap,
+absorb-on-overwrite), and the `FiberDialog`. This is the heading/label use a fiber
+is mostly for — a value typed once and held constant across a whole axis. *Demo:
+define a heading constant across a dimension; edit any member and the whole fiber
+updates.*
+
+**M5 — Formulas (substrate, surfaced at once).** Engine core: lex → parse →
 resolve → eval (§§4–7); then depgraph + topo recompute + cycle detect (§8).
 `SetCell` routes `=` inputs through the engine; formula bar shows source with
 elision (§6). *Demo: references, `SUM` over a 1-D range, recompute on edit,
 `#CYCLE!` — the worked-example formulas evaluate.*
 
-**M5 — Fibers (second n-D feature).** `Flat` coverage, order-free read
-resolution, create-time invariants (§9); `FiberDialog`; fibers as depgraph nodes.
-*Demo: define a value constant across a dimension; edit any member and the whole
-fiber updates.*
+**M6 — Fibers complete.** The remainder of §9 now that the engine exists: a fiber
+`input` may itself be a formula, and fibers participate as depgraph nodes so
+editing a fiber recomputes its dependents. *Demo: a formula-valued fiber; a
+formula that reads a fibered cell recomputes when the fiber changes.*
 
-**M6 — Worker + ops + undo (architectural hardening).** Formalize edits as the
+**M7 — Worker + ops + undo (architectural hardening).** Formalize edits as the
 discrete `Op` set with `invert` + undo log + §3 reference adjustment (§10),
 replacing the M2 placeholder writes; then move truth behind the worker: Comlink
 `WorkerApi`, the real `SliceCache`, optimistic apply/reconcile (§11). *Demo:
 unchanged behavior + undo/redo; heavy state off the UI thread, large sheets stay
 smooth.*
 
-**M7 — Persistence.** IndexedDB (`idb`) schema, debounced save, saved indicator,
+**M8 — Persistence.** IndexedDB (`idb`) schema, debounced save, saved indicator,
 recompute-on-load (§15). *Demo: close and reopen; the sheet is restored.*
 
-**M8 — Full UX baseline.** The deferred niceties, now that the substrate is real:
+**M9 — Full UX baseline.** The deferred niceties, now that the substrate is real:
 copy/paste with `$`-adjustment, constant + slider-drag fill, insert-by-click
-(§16); axis/position management panel with structural adjustment (§§3, 14);
-cell-as-dropdown navigator; header resize and fill-handle overlay (§13). *Demo:
-the v1 interaction set.*
+(§16); axis/position management panel with structural adjustment (§§3, 14); the
+cell-as-dropdown navigator (the second v1 navigator, intentionally late); header
+resize and fill-handle overlay (§13). *Demo: the v1 interaction set.*
 
-**M9 — e2e + acceptance.** Window test API; drive Playwright through every
+**M10 — e2e + acceptance.** Window test API; drive Playwright through every
 acceptance criterion (§19).
 
 ---

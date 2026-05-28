@@ -51,7 +51,20 @@ state layering, persistence (IndexedDB, identity-keyed JSON), parser
 (hand-rolled Pratt), and **document source-of-truth** (the worker owns the truth;
 the main thread caches the current viewport).
 
+## Settled — technical design
+
+See `tech-design.md`. Decided there: concrete types, the discrete-operation set
+and undo log, the worker RPC contract, the parser grammar/AST, eval and depgraph
+algorithms, fiber/coordinate encoding, the persistence schema, and the renderer
+architecture. Notably it resolves the **reference-index vs. storage-identity**
+question by factoring them apart — formula references are index-based (so `$` and
+relative copy are offset math), while the cell store and persisted document are
+keyed by stable `PositionId` tuples; resolution maps index → id, and structural
+insert/delete adjusts reference indices spreadsheet-style.
+
 ## Deferred to implementation (minor)
 
-- **Dexie vs. `idb`** for the IndexedDB wrapper.
+- **Dexie vs. `idb`** for the IndexedDB wrapper — `tech-design.md` §15
+  **recommends `idb`** (single-record document needs no query layer); still a
+  reversible implementation-time pick.
 - Test-suite specifics and the supported-browser matrix.

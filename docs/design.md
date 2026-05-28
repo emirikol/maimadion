@@ -162,16 +162,18 @@ constraint as selection, §8).
 
 ## 6. Fibers (`Flat`)
 
-A **fiber** is a single value held constant across an **axis-aligned region**:
-for each axis the region either fixes one position or spans a contiguous range
-(possibly the whole axis). A fiber is for values that are **genuinely invariant
-across a dimension** — a year that is the same for every month and category, a
+A **fiber** is a single value held constant across **one or more entire axes**:
+each axis is either pinned to one position or free across its whole extent. A
+fiber never spans a sub-range of an axis. A fiber is for values that are
+**genuinely invariant across a dimension** — a year that is the same for every month and category, a
 month name, a category name — and which remain ordinary computable values
 (a year held in a fiber can still be summed or subtracted).
 
 This is distinct from **copying**, which is a UI action producing independent
-cells. Values that merely repeat but can diverge or disappear over time (a rent
-amount, a debt line item that clears) are **copied, not fibered**.
+cells — including **slider-drag-fill** across a dimension, which writes
+independent cells, not a fiber. Values that merely repeat but can diverge or
+disappear over time (a rent amount, a debt line item that clears) are **copied,
+not fibered**.
 
 ### Resolution: immutable-by-override
 
@@ -190,8 +192,8 @@ never by both a fiber and an explicit value. Cell read resolution is therefore
 read(coord) = explicit value, else the unique covering fiber, else empty
 ```
 
-Fine-grained exceptions to a fiber (one rogue cell inside it) are intentionally
-out of scope and belong to a future n-dimensional constant-fill tool.
+Carving a per-cell exception inside a fiber (one rogue cell that differs) is
+intentionally out of scope for v1.
 
 ---
 
@@ -296,7 +298,6 @@ navigated positions, active coordinate, scroll); a schema/version tag.
 recompute-on-load vs. cached-on-disk is a technology-evaluation decision);
 transient UI state.
 
-The serialization format and storage mechanism are technology-evaluation
-questions. A requirement on whatever is chosen: it must round-trip stably across
-axis and position renames and reorders (which is why identities, not names, are
-the keys).
+The serialization format and storage mechanism are settled in `technology.md`.
+The conceptual requirement: it must round-trip stably across axis renames (which
+is why axis **identity**, not name, is the key). Axes are not reorderable in v1.

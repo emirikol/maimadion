@@ -102,9 +102,9 @@ fill-handle overlays, header resize, keyboard navigation, clipboard.
 - **Session state** — derived: dependency graph + computed values/errors.
 - **UI state** — selection, focus, scroll, in-progress edit, active navigator.
 
-### Worker boundary and source-of-truth — _recommended, open to veto_
+### Worker boundary and source-of-truth — _confirmed_
 
-**Recommendation: the worker owns the document truth + dependency graph +
+**Decision: the worker owns the document truth + dependency graph +
 recompute + persistence.** The main thread is a thin view/input layer: it sends
 operations and receives computed values **scoped to the current viewport plus a
 margin**, cached locally so rendering and selection stay synchronous. Edits
@@ -149,9 +149,8 @@ preserves both the worker boundary and the future Rust port.
 
 ## Remaining open items
 
-- **Confirm the source-of-truth recommendation** (worker-owns-truth vs.
-  main-owns-truth) above.
-- Carried from `open-questions.md` §B and unaffected by stack choice:
-  exponentiation `^` in v1; fiber sub-ranges in v1; subtotal convention; range
-  endpoint-deletion semantics; axis/position creation UX.
-- Dexie vs. `idb` is a minor pick deferrable to implementation.
+- **Dexie vs. `idb`** for the IndexedDB wrapper — a minor pick deferrable to
+  implementation.
+
+Source-of-truth is decided (above). The product questions previously parked here
+are settled in `open-questions.md`.

@@ -193,7 +193,12 @@ read(coord) = explicit value, else the unique covering fiber, else empty
 ```
 
 Carving a per-cell exception inside a fiber (one rogue cell that differs) is
-intentionally out of scope for v1.
+intentionally **outside the domain of fibers** — not deferred work, but a
+deliberate non-goal. A fiber is, by definition, a region of one shared value;
+"a fiber with an exception" is a contradiction. Users who want almost-uniform
+fill with manual overrides are served by a *separate, future n-dimensional
+constant-fill tool*, which addresses that similar-but-distinct scenario without
+compromising the fiber's order-free read resolution.
 
 ---
 

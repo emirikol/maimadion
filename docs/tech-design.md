@@ -57,7 +57,7 @@ would go.
 ```ts
 type AxisId     = string;   // opaque stable id (e.g. nanoid)
 type PositionId = string;   // opaque stable id
-type FiberId    = string;
+type FlatId     = string;
 type Index      = number;   // 1-based position index within an axis
 
 interface Position { id: PositionId }            // a slot; its label is ordinary cell data
@@ -105,7 +105,7 @@ type Expr =
   | { kind: "rangeRef"; ref: RangeRef };
 
 interface Flat {                                  // a fiber (user-facing) — code name is stable
-  id: FiberId;
+  id: FlatId;
   pins: Map<AxisId, Index>;                       // axes pinned to one position
   free: Set<AxisId>;                              // axes spanned across their whole extent
   input: CellInput;                               // one shared input (literal or formula)
@@ -126,7 +126,7 @@ range-edge side table — see §8. None of `CellValue`/`Computed`/`DependencyGra
 is persisted.
 
 The **document** in v1 is one `Sheet`: `{ axes: Axis[], cells: Map<CellKey,
-CellInput>, fibers: Flat[], viewport: ViewportBinding, headerSizes }`. `axes` is
+CellInput>, flats: Flat[], viewport: ViewportBinding, headerSizes }`. `axes` is
 ordered — axis order assigns the address letters (§4) and is not reorderable in
 v1.
 
@@ -304,7 +304,7 @@ don't churn the graph except where positions actually disappear.
   fixed components and whose `[from,to]` contains `c`'s varying index.
 
 **Fibers participate as nodes** (§9): a reference resolving into a fiber-covered
-coordinate registers its edge against the `FiberId`, so editing the fiber dirties
+coordinate registers its edge against the `FlatId`, so editing the fiber dirties
 dependents.
 
 **Recompute** (on any op that changes a value): seed the dirty set with the edited
@@ -359,9 +359,9 @@ operations (`design.md` §1) — this *is* the edit model and the undo granulari
 ```ts
 type Op =
   | { t: "SetCell";        coord: Coord; input: CellInput;  prev: CellInput }
-  | { t: "CreateFiber";    fiber: Flat }
-  | { t: "EditFiber";      id: FiberId; input: CellInput;   prev: CellInput }
-  | { t: "DeleteFiber";    fiber: Flat }
+  | { t: "CreateFlat";     flat: Flat }
+  | { t: "EditFlat";       id: FlatId; input: CellInput;   prev: CellInput }
+  | { t: "DeleteFlat";     flat: Flat }
   | { t: "InsertPosition"; axisId: AxisId; index: Index;    posId: PositionId }
   | { t: "DeletePosition"; axisId: AxisId; index: Index;    removed: RemovedSlice }
   | { t: "CreateAxis";     axis: Axis }
@@ -400,9 +400,9 @@ interface WorkerApi {
 }
 
 interface SliceReq  { rowAxisId; colAxisId; navigated; rowRange; colRange }  // + margin
-interface SliceData { cells: Array<{ key: CellKey; computed: Computed; fiber?: FiberId }>; meta }
+interface SliceData { cells: Array<{ key: CellKey; computed: Computed; flat?: FlatId }>; meta }
 interface OpResult  {
-  changed: Array<{ key: CellKey; computed: Computed; fiber?: FiberId }>;     // ∩ viewport+margin
+  changed: Array<{ key: CellKey; computed: Computed; flat?: FlatId }>;     // ∩ viewport+margin
   structural?: StructuralDelta;                     // axis/position adds/removes for chrome
   ok: true | { error: string };                     // e.g. fiber-overlap rejection
 }
@@ -478,7 +478,7 @@ flows to/from the worker via the RPC client. Components:
   cell along a perpendicular dimension to view/navigate/edit its values there.
 - **AxisPanel** — create/rename/delete axes (no reorder); insert/delete positions
   (with §3 adjustment); lightweight in-app panel, not `prompt()`.
-- **FiberDialog** — define/edit a fiber; surfaces overlap errors and the
+- **FlatDialog** — define/edit a fiber; surfaces overlap errors and the
   absorb-on-overwrite option (§9).
 - **SavedIndicator** — reflects the debounced persistence state (§15).
 
@@ -495,7 +495,7 @@ round-trips across renames (and forward-compat reorders):
   "axes": [ { "id": "...", "name": "year", "positions": ["pos..", ...],
              "sizes": { "pos..": 96 } } ],
   "cells": [ { "key": [["axisId","posId"], ...], "input": { "kind": "..." } } ],
-  "fibers": [ { "id": "...", "pins": [["axisId", 3]], "free": ["axisId"],
+  "flats": [ { "id": "...", "pins": [["axisId", 3]], "free": ["axisId"],
                "input": { "kind": "..." } } ],
   "viewport": { "rowAxisId": "...", "colAxisId": "...",
                 "navigated": [["axisId", 1]], "activeCoord": [...], "scroll": {...} }
@@ -617,7 +617,7 @@ distinctly-maimadion thing on screen.*
 — most of §9 without needing the engine: the `pins`/`free` representation,
 order-free read resolution (explicit → fiber → empty) folded into the placeholder
 `read(coord)`, create-time invariants (no fiber/fiber or fiber/explicit overlap,
-absorb-on-overwrite), and the `FiberDialog`. This is the heading/label use a fiber
+absorb-on-overwrite), and the `FlatDialog`. This is the heading/label use a fiber
 is mostly for — a value typed once and held constant across a whole axis. *Demo:
 define a heading constant across a dimension; edit any member and the whole fiber
 updates.*

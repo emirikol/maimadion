@@ -6,12 +6,12 @@
   // The name box shows the active cell's fully-qualified address (§4); the input
   // mirrors the active cell — its committed text, or the live edit buffer (§14).
   const address = $derived.by(() => {
-    void [controller.activeRow, controller.activeCol];
+    void [controller.activeRow, controller.activeCol, controller.navVersion];
     return controller.activeAddress();
   });
   const value = $derived.by(() => {
     if (controller.editing) return controller.editBuffer;
-    void [controller.rev, controller.activeRow, controller.activeCol];
+    void [controller.rev, controller.activeRow, controller.activeCol, controller.navVersion];
     return controller.activeText();
   });
 

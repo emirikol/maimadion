@@ -5,7 +5,7 @@
 import { axisLetter } from '../engine/coord';
 import type { Index, Sheet } from '../engine/types';
 import { displayValue, readCellInput } from '../model/sheet';
-import { coordAt } from './projection';
+import { coordAt, type Projection } from './projection';
 
 export const LAYOUT = {
   rowH: 24, // body cell height
@@ -32,14 +32,18 @@ export interface RenderParams {
   scrollLeft: number;
   scrollTop: number;
   sheet: Sheet;
+  view: Projection; // the current visible binding + navigated positions (§12)
   // The active cell's 1-based indices on the two visible axes (§16 selection).
   active: { row: Index; col: Index };
 }
 
-/** Total grid size in CSS px (for the scroll spacer). */
-export function contentSize(sheet: Sheet): { width: number; height: number } {
-  const rows = axisOf(sheet, sheet.viewport.rowAxisId).positions.length;
-  const cols = axisOf(sheet, sheet.viewport.colAxisId).positions.length;
+/** Total grid size in CSS px (for the scroll spacer), for the given binding. */
+export function contentSize(
+  sheet: Sheet,
+  view: Pick<Projection, 'rowAxisId' | 'colAxisId'>,
+): { width: number; height: number } {
+  const rows = axisOf(sheet, view.rowAxisId).positions.length;
+  const cols = axisOf(sheet, view.colAxisId).positions.length;
   return {
     width: LAYOUT.headerW + cols * LAYOUT.colW,
     height: LAYOUT.headerH + rows * LAYOUT.rowH,
@@ -53,9 +57,8 @@ function axisOf(sheet: Sheet, id: string) {
 }
 
 export function render(p: RenderParams): void {
-  const { ctx, cssWidth, cssHeight, dpr, scrollLeft, scrollTop, sheet, active } = p;
+  const { ctx, cssWidth, cssHeight, dpr, scrollLeft, scrollTop, sheet, view, active } = p;
   const { rowH, colW, headerW, headerH } = LAYOUT;
-  const view = sheet.viewport;
   const activeRow0 = active.row - 1;
   const activeCol0 = active.col - 1;
 

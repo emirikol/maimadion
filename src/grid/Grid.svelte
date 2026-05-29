@@ -17,7 +17,7 @@
   let vw = $state(0);
   let vh = $state(0);
 
-  const content = $derived(contentSize(controller.sheet));
+  const content = $derived(contentSize(controller.sheet, controller.projection()));
 
   // The active cell's screen rect (CSS px, relative to .grid) — positions the editor.
   const editorRect = $derived.by(() => {
@@ -47,11 +47,13 @@
       scrollLeft,
       scrollTop,
       sheet: controller.sheet,
+      view: controller.projection(),
       active: { row: controller.activeRow, col: controller.activeCol },
     });
   }
 
-  // Repaint whenever any visual input changes (size, scroll, active cell, data rev).
+  // Repaint whenever any visual input changes (size, scroll, active cell, data rev,
+  // or a view change — rebind/navigate, tracked via navVersion + the bound axes).
   $effect(() => {
     void [
       vw,
@@ -63,6 +65,9 @@
       controller.rev,
       controller.editing,
       controller.editSource,
+      controller.rowAxisId,
+      controller.colAxisId,
+      controller.navVersion,
     ];
     paint();
   });

@@ -1,8 +1,17 @@
-// Address & storage-key codecs — mirrors docs/tech-design.md §4 (the parts in M0:
-// the axis-letter scheme and the CellKey encoding). Address-string parsing lives
-// in the lexer/parser (a later milestone), not here.
+// Address & storage-key codecs — mirrors docs/tech-design.md §4: the axis-letter
+// scheme, the CellKey encoding (M0), and address parsing/printing (M5). The address
+// scanner here is what the lexer delegates to (§5); the printer supports both the
+// fully-qualified stored form and the context-elided display form (§6).
 
-import type { CellKey, PositionCoord } from './types';
+import type {
+  Axis,
+  CellKey,
+  CellRef,
+  Coord,
+  PositionCoord,
+  RangeRef,
+  RefComponent,
+} from './types';
 
 // Axis letters (§4 / design.md §3): x, y, z, m, n first (the conventional
 // mathematical axis letters), then the remaining lowercase letters
@@ -72,4 +81,137 @@ export function decodeCellKey(key: CellKey): PositionCoord {
     coord.set(part.slice(0, i), part.slice(i + 1));
   }
   return coord;
+}
+
+// --- Address parsing & printing (§4, §6) ------------------------------------------
+
+export class AddressError extends Error {}
+
+/**
+ * Parse a fully- or partially-qualified address into a (possibly partial) reference.
+ * Each `[$]?<letter><digits>` segment names its axis by letter (so segment order is
+ * free); a single segment may carry a `:` making it the range's varying axis, with
+ * the §4 colon rule: after `:`, digits are the upper bound, while a letter or the end
+ * of the address means "to the end of this axis" (an open bound). A partial address
+ * (omitting some axes) is completed against the authoring context by {@link completeRef}
+ * before storage (§6); this scanner does no completion.
+ */
+export function parseAddress(s: string, axes: Axis[]): CellRef | RangeRef {
+  const comps: RefComponent[] = [];
+  let varying: RangeRef['varying'] | null = null;
+  let i = 0;
+
+  const axisIdForLetter = (letter: string): string => {
+    const pos = axisPositionForLetter(letter); // throws on a non-letter
+    const axis = axes[pos];
+    if (!axis) throw new AddressError(`no axis for letter "${letter}"`);
+    return axis.id;
+  };
+  const readDollarDigits = (): { absolute: boolean; digits: string } => {
+    let absolute = false;
+    if (s[i] === '$') {
+      absolute = true;
+      i++;
+    }
+    const start = i;
+    while (i < s.length && s[i] >= '0' && s[i] <= '9') i++;
+    return { absolute, digits: s.slice(start, i) };
+  };
+
+  while (i < s.length) {
+    let absolute = false;
+    if (s[i] === '$') {
+      absolute = true;
+      i++;
+    }
+    const letterStart = i;
+    while (i < s.length && s[i] >= 'a' && s[i] <= 'z') i++;
+    const letter = s.slice(letterStart, i);
+    if (letter.length < 1 || letter.length > 2) {
+      throw new AddressError(`expected an axis letter at ${letterStart} in "${s}"`);
+    }
+    const axisId = axisIdForLetter(letter);
+
+    const from = readDollarDigits();
+    if (s[i] === ':') {
+      if (varying) throw new AddressError(`a range varies on only one axis: "${s}"`);
+      i++; // consume ':'
+      const to = readDollarDigits();
+      varying = {
+        axisId,
+        from: from.digits === '' ? { kind: 'open' } : { kind: 'index', index: Number(from.digits) },
+        to: to.digits === '' ? { kind: 'open' } : { kind: 'index', index: Number(to.digits) },
+        absFrom: absolute || from.absolute,
+        absTo: to.absolute,
+      };
+    } else {
+      if (from.digits === '') {
+        throw new AddressError(`axis "${letter}" needs an index (or a ':' range) in "${s}"`);
+      }
+      comps.push({ axisId, index: Number(from.digits), absolute: absolute || from.absolute });
+    }
+  }
+
+  if (varying) return { kind: 'range', fixed: comps, varying };
+  return { kind: 'cell', comps };
+}
+
+/**
+ * Complete a (possibly partial) reference against an authoring context — the active
+ * cell's full coordinate — filling every unnamed axis with a relative component at
+ * the context's index (§6 author→store). The result names every axis.
+ */
+export function completeRef<R extends CellRef | RangeRef>(ref: R, context: Coord, axes: Axis[]): R {
+  const named = new Set(
+    ref.kind === 'cell'
+      ? ref.comps.map((c) => c.axisId)
+      : [ref.varying.axisId, ...ref.fixed.map((c) => c.axisId)],
+  );
+  const filled: RefComponent[] = [];
+  for (const axis of axes) {
+    if (named.has(axis.id)) continue;
+    const index = context.get(axis.id);
+    if (index === undefined) continue;
+    filled.push({ axisId: axis.id, index, absolute: false });
+  }
+  if (ref.kind === 'cell') return { ...ref, comps: [...ref.comps, ...filled] };
+  return { ...ref, fixed: [...ref.fixed, ...filled] };
+}
+
+const compText = (c: RefComponent, pos: number): string =>
+  `${c.absolute ? '$' : ''}${axisLetter(pos)}${c.index}`;
+
+/**
+ * Print a reference. With no `context` the output is fully qualified (the stored
+ * `src` form); with a context, relative components whose index matches the context
+ * are elided (the formula-bar display form, §6). The varying axis of a range is never
+ * elided. Components are emitted in axis order so the §4 colon rule round-trips.
+ */
+export function formatRef(ref: CellRef | RangeRef, axes: Axis[], context?: Coord): string {
+  const posOf = new Map(axes.map((a, p) => [a.id, p]));
+  const elide = (c: RefComponent): boolean =>
+    context !== undefined && !c.absolute && context.get(c.axisId) === c.index;
+
+  if (ref.kind === 'cell') {
+    return axes
+      .map((axis) => {
+        const c = ref.comps.find((x) => x.axisId === axis.id);
+        return c && !elide(c) ? compText(c, posOf.get(axis.id)!) : '';
+      })
+      .join('');
+  }
+
+  const { varying } = ref;
+  return axes
+    .map((axis) => {
+      const pos = posOf.get(axis.id)!;
+      if (axis.id === varying.axisId) {
+        const from = varying.from.kind === 'index' ? `${varying.absFrom ? '$' : ''}${varying.from.index}` : '';
+        const to = varying.to.kind === 'index' ? `${varying.absTo ? '$' : ''}${varying.to.index}` : '';
+        return `${axisLetter(pos)}${from}:${to}`;
+      }
+      const c = ref.fixed.find((x) => x.axisId === axis.id);
+      return c && !elide(c) ? compText(c, pos) : '';
+    })
+    .join('');
 }

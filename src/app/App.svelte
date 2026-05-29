@@ -7,7 +7,7 @@
   import FlatDialog from '../ui/FlatDialog.svelte';
   import { SheetController } from './controller.svelte';
   import { coordAt, hiddenAxes } from '../grid/projection';
-  import { createSeedSheet, displayValue, readCell } from '../model/sheet';
+  import { createSeedSheet } from '../model/sheet';
 
   const controller = new SheetController(createSeedSheet());
 
@@ -46,9 +46,9 @@
       active: () => ({ row: controller.activeRow, col: controller.activeCol }),
       select: (row, col) => controller.select(row, col),
       cellText: (row, col) =>
-        displayValue(readCell(controller.sheet, coordAt(controller.projection(), row, col)).input),
+        controller.cellDisplay(coordAt(controller.projection(), row, col)).text,
       cellSource: (row, col) =>
-        readCell(controller.sheet, coordAt(controller.projection(), row, col)).source,
+        controller.cellDisplay(coordAt(controller.projection(), row, col)).source,
       navigate: (axisId, index) => controller.navigate(axisId, index),
       navigated: (axisId) => controller.navigatedIndex(axisId),
       rebind: (rowAxisId, colAxisId) => controller.rebind(rowAxisId, colAxisId),
@@ -70,7 +70,7 @@
 <div class="app">
   <header>
     <h1>maimadion</h1>
-    <span>M4 — literal fibers</span>
+    <span>M5 — formulas</span>
   </header>
   <FormulaBar {controller} />
   <div class="view-controls">

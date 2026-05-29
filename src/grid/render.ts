@@ -3,8 +3,8 @@
 // Uniform cell sizes for M1 (per-position resize is M9).
 
 import { axisLetter } from '../engine/coord';
-import type { Index, Sheet } from '../engine/types';
-import { displayValue, readCell } from '../model/sheet';
+import type { Coord, Index, Sheet } from '../engine/types';
+import type { CellSource } from '../model/sheet';
 import { coordAt, type Projection } from './projection';
 
 export const LAYOUT = {
@@ -34,6 +34,9 @@ export interface RenderParams {
   scrollTop: number;
   sheet: Sheet;
   view: Projection; // the current visible binding + navigated positions (§12)
+  // The display string (computed value, §7) and source of a coordinate. Supplied by
+  // the controller so the renderer owns no value/formula logic.
+  read: (coord: Coord) => { text: string; source: CellSource };
   // The active cell's 1-based indices on the two visible axes (§16 selection).
   active: { row: Index; col: Index };
 }
@@ -58,7 +61,7 @@ function axisOf(sheet: Sheet, id: string) {
 }
 
 export function render(p: RenderParams): void {
-  const { ctx, cssWidth, cssHeight, dpr, scrollLeft, scrollTop, sheet, view, active } = p;
+  const { ctx, cssWidth, cssHeight, dpr, scrollLeft, scrollTop, sheet, view, read, active } = p;
   const { rowH, colW, headerW, headerH } = LAYOUT;
   const activeRow0 = active.row - 1;
   const activeCol0 = active.col - 1;
@@ -98,7 +101,7 @@ export function render(p: RenderParams): void {
   for (let r = firstRow; r <= lastRow; r++) {
     const y = headerH + r * rowH - scrollTop;
     for (let c = firstCol; c <= lastCol; c++) {
-      if (readCell(sheet, coordAt(view, r + 1, c + 1)).source !== 'flat') continue;
+      if (read(coordAt(view, r + 1, c + 1)).source !== 'flat') continue;
       const x = headerW + c * colW - scrollLeft;
       ctx.fillRect(x, y, colW, rowH);
     }
@@ -124,7 +127,7 @@ export function render(p: RenderParams): void {
   for (let r = firstRow; r <= lastRow; r++) {
     const y = headerH + r * rowH - scrollTop;
     for (let c = firstCol; c <= lastCol; c++) {
-      const text = displayValue(readCell(sheet, coordAt(view, r + 1, c + 1)).input);
+      const text = read(coordAt(view, r + 1, c + 1)).text;
       if (!text) continue;
       const x = headerW + c * colW - scrollLeft;
       ctx.save();

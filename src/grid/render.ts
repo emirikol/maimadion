@@ -3,7 +3,7 @@
 // Uniform cell sizes for M1 (per-position resize is M9).
 
 import { axisLetter } from '../engine/coord';
-import type { Sheet } from '../engine/types';
+import type { Index, Sheet } from '../engine/types';
 import { displayValue, readCellInput } from '../model/sheet';
 import { coordAt } from './projection';
 
@@ -20,6 +20,8 @@ const COLORS = {
   gutterBg: '#f6f6f6',
   gutterText: '#555',
   gutterBorder: '#cfcfcf',
+  accent: '#1a73e8', // active-cell outline + active header
+  accentBg: '#e8f0fe', // active header background
 } as const;
 
 export interface RenderParams {
@@ -30,6 +32,8 @@ export interface RenderParams {
   scrollLeft: number;
   scrollTop: number;
   sheet: Sheet;
+  // The active cell's 1-based indices on the two visible axes (§16 selection).
+  active: { row: Index; col: Index };
 }
 
 /** Total grid size in CSS px (for the scroll spacer). */
@@ -49,9 +53,11 @@ function axisOf(sheet: Sheet, id: string) {
 }
 
 export function render(p: RenderParams): void {
-  const { ctx, cssWidth, cssHeight, dpr, scrollLeft, scrollTop, sheet } = p;
+  const { ctx, cssWidth, cssHeight, dpr, scrollLeft, scrollTop, sheet, active } = p;
   const { rowH, colW, headerW, headerH } = LAYOUT;
   const view = sheet.viewport;
+  const activeRow0 = active.row - 1;
+  const activeCol0 = active.col - 1;
 
   const rowAxisPos = sheet.axes.findIndex((a) => a.id === view.rowAxisId);
   const colAxisPos = sheet.axes.findIndex((a) => a.id === view.colAxisId);
@@ -122,13 +128,17 @@ export function render(p: RenderParams): void {
   ctx.clip();
   ctx.fillStyle = COLORS.gutterBg;
   ctx.fillRect(headerW, 0, bodyW, headerH);
-  ctx.fillStyle = COLORS.gutterText;
   ctx.textAlign = 'center';
   ctx.strokeStyle = COLORS.gutterBorder;
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let c = firstCol; c <= lastCol; c++) {
     const x = headerW + c * colW - scrollLeft;
+    if (c === activeCol0) {
+      ctx.fillStyle = COLORS.accentBg;
+      ctx.fillRect(x, 0, colW, headerH);
+    }
+    ctx.fillStyle = c === activeCol0 ? COLORS.accent : COLORS.gutterText;
     ctx.fillText(`${colLetter}${c + 1}`, x + colW / 2, headerH / 2);
     const bx = Math.round(x) + 0.5;
     ctx.moveTo(bx, 0);
@@ -144,13 +154,17 @@ export function render(p: RenderParams): void {
   ctx.clip();
   ctx.fillStyle = COLORS.gutterBg;
   ctx.fillRect(0, headerH, headerW, bodyH);
-  ctx.fillStyle = COLORS.gutterText;
   ctx.textAlign = 'center';
   ctx.strokeStyle = COLORS.gutterBorder;
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let r = firstRow; r <= lastRow; r++) {
     const y = headerH + r * rowH - scrollTop;
+    if (r === activeRow0) {
+      ctx.fillStyle = COLORS.accentBg;
+      ctx.fillRect(0, y, headerW, rowH);
+    }
+    ctx.fillStyle = r === activeRow0 ? COLORS.accent : COLORS.gutterText;
     ctx.fillText(`${rowLetter}${r + 1}`, headerW / 2, y + rowH / 2);
     const by = Math.round(y) + 0.5;
     ctx.moveTo(0, by);
@@ -170,6 +184,20 @@ export function render(p: RenderParams): void {
   ctx.moveTo(0, headerH + 0.5);
   ctx.lineTo(cssWidth, headerH + 0.5);
   ctx.stroke();
+
+  // --- Overlay: active-cell outline (§13), clipped to the body region ---
+  if (activeRow0 >= 0 && activeCol0 >= 0) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(headerW, headerH, bodyW, bodyH);
+    ctx.clip();
+    const ax = headerW + activeCol0 * colW - scrollLeft;
+    const ay = headerH + activeRow0 * rowH - scrollTop;
+    ctx.strokeStyle = COLORS.accent;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(Math.round(ax) + 1, Math.round(ay) + 1, colW - 2, rowH - 2);
+    ctx.restore();
+  }
 
   ctx.restore();
 }

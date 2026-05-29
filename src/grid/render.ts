@@ -1,0 +1,175 @@
+// Canvas renderer — mirrors tech-design §13, for the M1 2-D slice. Owns no n-D
+// logic: it draws an ordinary grid fed by the sheet via the placeholder read path.
+// Uniform cell sizes for M1 (per-position resize is M9).
+
+import { axisLetter } from '../engine/coord';
+import type { Sheet } from '../engine/types';
+import { displayValue, readCellInput } from '../model/sheet';
+import { coordAt } from './projection';
+
+export const LAYOUT = {
+  rowH: 24, // body cell height
+  colW: 96, // body cell width
+  headerW: 56, // left gutter (row headers) width
+  headerH: 24, // top gutter (column headers) height
+} as const;
+
+const COLORS = {
+  cellText: '#1a1a1a',
+  gridline: '#e3e3e3',
+  gutterBg: '#f6f6f6',
+  gutterText: '#555',
+  gutterBorder: '#cfcfcf',
+} as const;
+
+export interface RenderParams {
+  ctx: CanvasRenderingContext2D;
+  cssWidth: number; // viewport size in CSS px
+  cssHeight: number;
+  dpr: number; // devicePixelRatio
+  scrollLeft: number;
+  scrollTop: number;
+  sheet: Sheet;
+}
+
+/** Total grid size in CSS px (for the scroll spacer). */
+export function contentSize(sheet: Sheet): { width: number; height: number } {
+  const rows = axisOf(sheet, sheet.viewport.rowAxisId).positions.length;
+  const cols = axisOf(sheet, sheet.viewport.colAxisId).positions.length;
+  return {
+    width: LAYOUT.headerW + cols * LAYOUT.colW,
+    height: LAYOUT.headerH + rows * LAYOUT.rowH,
+  };
+}
+
+function axisOf(sheet: Sheet, id: string) {
+  const axis = sheet.axes.find((a) => a.id === id);
+  if (!axis) throw new Error(`axis not found: ${id}`);
+  return axis;
+}
+
+export function render(p: RenderParams): void {
+  const { ctx, cssWidth, cssHeight, dpr, scrollLeft, scrollTop, sheet } = p;
+  const { rowH, colW, headerW, headerH } = LAYOUT;
+  const view = sheet.viewport;
+
+  const rowAxisPos = sheet.axes.findIndex((a) => a.id === view.rowAxisId);
+  const colAxisPos = sheet.axes.findIndex((a) => a.id === view.colAxisId);
+  const rowLetter = axisLetter(rowAxisPos);
+  const colLetter = axisLetter(colAxisPos);
+  const rowCount = sheet.axes[rowAxisPos]!.positions.length;
+  const colCount = sheet.axes[colAxisPos]!.positions.length;
+
+  const bodyW = cssWidth - headerW;
+  const bodyH = cssHeight - headerH;
+
+  const firstRow = Math.max(0, Math.floor(scrollTop / rowH));
+  const lastRow = Math.min(rowCount - 1, Math.floor((scrollTop + bodyH) / rowH));
+  const firstCol = Math.max(0, Math.floor(scrollLeft / colW));
+  const lastCol = Math.min(colCount - 1, Math.floor((scrollLeft + bodyW) / colW));
+
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, cssWidth, cssHeight);
+  ctx.font = '13px system-ui, -apple-system, sans-serif';
+  ctx.textBaseline = 'middle';
+
+  // --- Body: values + gridlines, clipped to the body region ---
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(headerW, headerH, bodyW, bodyH);
+  ctx.clip();
+
+  ctx.strokeStyle = COLORS.gridline;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let c = firstCol; c <= lastCol + 1; c++) {
+    const x = Math.round(headerW + c * colW - scrollLeft) + 0.5;
+    ctx.moveTo(x, headerH);
+    ctx.lineTo(x, cssHeight);
+  }
+  for (let r = firstRow; r <= lastRow + 1; r++) {
+    const y = Math.round(headerH + r * rowH - scrollTop) + 0.5;
+    ctx.moveTo(headerW, y);
+    ctx.lineTo(cssWidth, y);
+  }
+  ctx.stroke();
+
+  ctx.fillStyle = COLORS.cellText;
+  ctx.textAlign = 'left';
+  for (let r = firstRow; r <= lastRow; r++) {
+    const y = headerH + r * rowH - scrollTop;
+    for (let c = firstCol; c <= lastCol; c++) {
+      const text = displayValue(readCellInput(sheet, coordAt(view, r + 1, c + 1)));
+      if (!text) continue;
+      const x = headerW + c * colW - scrollLeft;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, colW, rowH);
+      ctx.clip();
+      ctx.fillText(text, x + 6, y + rowH / 2);
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+
+  // --- Top gutter: column headers (axis letter + 1-based index) ---
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(headerW, 0, bodyW, headerH);
+  ctx.clip();
+  ctx.fillStyle = COLORS.gutterBg;
+  ctx.fillRect(headerW, 0, bodyW, headerH);
+  ctx.fillStyle = COLORS.gutterText;
+  ctx.textAlign = 'center';
+  ctx.strokeStyle = COLORS.gutterBorder;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let c = firstCol; c <= lastCol; c++) {
+    const x = headerW + c * colW - scrollLeft;
+    ctx.fillText(`${colLetter}${c + 1}`, x + colW / 2, headerH / 2);
+    const bx = Math.round(x) + 0.5;
+    ctx.moveTo(bx, 0);
+    ctx.lineTo(bx, headerH);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // --- Left gutter: row headers ---
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, headerH, headerW, bodyH);
+  ctx.clip();
+  ctx.fillStyle = COLORS.gutterBg;
+  ctx.fillRect(0, headerH, headerW, bodyH);
+  ctx.fillStyle = COLORS.gutterText;
+  ctx.textAlign = 'center';
+  ctx.strokeStyle = COLORS.gutterBorder;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let r = firstRow; r <= lastRow; r++) {
+    const y = headerH + r * rowH - scrollTop;
+    ctx.fillText(`${rowLetter}${r + 1}`, headerW / 2, y + rowH / 2);
+    const by = Math.round(y) + 0.5;
+    ctx.moveTo(0, by);
+    ctx.lineTo(headerW, by);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // --- Corner + gutter outlines ---
+  ctx.fillStyle = COLORS.gutterBg;
+  ctx.fillRect(0, 0, headerW, headerH);
+  ctx.strokeStyle = COLORS.gutterBorder;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(headerW + 0.5, 0);
+  ctx.lineTo(headerW + 0.5, cssHeight);
+  ctx.moveTo(0, headerH + 0.5);
+  ctx.lineTo(cssWidth, headerH + 0.5);
+  ctx.stroke();
+
+  ctx.restore();
+}

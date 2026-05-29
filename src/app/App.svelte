@@ -4,9 +4,10 @@
   import FormulaBar from '../ui/FormulaBar.svelte';
   import AxisBindingControl from '../ui/AxisBindingControl.svelte';
   import Slider from '../ui/Slider.svelte';
+  import FlatDialog from '../ui/FlatDialog.svelte';
   import { SheetController } from './controller.svelte';
   import { coordAt, hiddenAxes } from '../grid/projection';
-  import { createSeedSheet, displayValue, readCellInput } from '../model/sheet';
+  import { createSeedSheet, displayValue, readCell } from '../model/sheet';
 
   const controller = new SheetController(createSeedSheet());
 
@@ -22,23 +23,32 @@
     active(): { row: number; col: number };
     select(row: number, col: number): void;
     cellText(row: number, col: number): string;
+    cellSource(row: number, col: number): string;
     navigate(axisId: string, index: number): void;
     navigated(axisId: string): number;
     rebind(rowAxisId: string, colAxisId: string): void;
     swap(): void;
     binding(): { row: string; col: string };
     axes(): { id: string; name: string; count: number }[];
+    fiberCount(): number;
+    defineFiber(
+      freeAxisIds: string[],
+      raw: string,
+      absorb?: boolean,
+    ): { ok: boolean; reason?: string; count: number };
   }
 
   onMount(() => {
     // Window test API (tech-design §17): canvas cells aren't DOM-queryable, so e2e
-    // reads cell text and drives selection/navigation/binding through this hook.
-    // Formalized in M10.
+    // reads cell text/source and drives selection/navigation/binding/fibers through
+    // this hook. Formalized in M10.
     (window as unknown as { __mai: MaiTestApi }).__mai = {
       active: () => ({ row: controller.activeRow, col: controller.activeCol }),
       select: (row, col) => controller.select(row, col),
       cellText: (row, col) =>
-        displayValue(readCellInput(controller.sheet, coordAt(controller.projection(), row, col))),
+        displayValue(readCell(controller.sheet, coordAt(controller.projection(), row, col)).input),
+      cellSource: (row, col) =>
+        readCell(controller.sheet, coordAt(controller.projection(), row, col)).source,
       navigate: (axisId, index) => controller.navigate(axisId, index),
       navigated: (axisId) => controller.navigatedIndex(axisId),
       rebind: (rowAxisId, colAxisId) => controller.rebind(rowAxisId, colAxisId),
@@ -46,6 +56,13 @@
       binding: () => ({ row: controller.rowAxisId, col: controller.colAxisId }),
       axes: () =>
         controller.sheet.axes.map((a) => ({ id: a.id, name: a.name, count: a.positions.length })),
+      fiberCount: () => controller.sheet.flats.length,
+      defineFiber: (freeAxisIds, raw, absorb = false) => {
+        const r = controller.createFiber(freeAxisIds, raw, absorb);
+        return r.ok
+          ? { ok: true, count: 0 }
+          : { ok: false, reason: r.reason, count: r.reason === 'explicit-collision' ? r.keys.length : 0 };
+      },
     };
   });
 </script>
@@ -53,7 +70,7 @@
 <div class="app">
   <header>
     <h1>maimadion</h1>
-    <span>M3 — navigate dimensions</span>
+    <span>M4 — literal fibers</span>
   </header>
   <FormulaBar {controller} />
   <div class="view-controls">
@@ -61,11 +78,18 @@
     {#each hidden as axis (axis.id)}
       <Slider {controller} {axis} />
     {/each}
+    <button class="define-constant" type="button" onclick={() => controller.openFlatDialog()}>
+      Define constant…
+    </button>
   </div>
   <div class="grid-host">
     <Grid {controller} />
   </div>
 </div>
+
+{#if controller.flatDialogOpen}
+  <FlatDialog {controller} />
+{/if}
 
 <style>
   :global(html, body, #app) {
@@ -102,6 +126,18 @@
     border-bottom: 1px solid #ddd;
     background: #fafafa;
     font-size: 13px;
+  }
+  .define-constant {
+    margin-left: auto;
+    font: inherit;
+    padding: 2px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+  }
+  .define-constant:hover {
+    background: #f0f0f0;
   }
   .grid-host {
     flex: 1;

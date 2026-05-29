@@ -6,16 +6,24 @@
 // it only changes which slice projects onto the screen, and the active cell follows
 // the screen. Two revision counters drive repaint/re-read: `rev` on data writes,
 // `navVersion` on view (binding/navigation) changes. Writes still go straight to the
-// in-memory sheet via setCell — the discrete-op + undo system (§10) and the
-// worker-owned store (§11) replace that in M7.
+// in-memory sheet — the discrete-op + undo system (§10) and the worker-owned store
+// (§11) replace that in M7.
+//
+// M4 adds fibers: an edit on a fiber-covered cell edits the whole fiber, and the
+// FlatDialog defines new ones from the active cell (§9, §14).
 
-import type { AxisId, CellInput, Coord, Index, Sheet } from '../engine/types';
+import type { AxisId, CellInput, Coord, Flat, Index, Sheet } from '../engine/types';
 import { coordAt, type Projection } from '../grid/projection';
 import {
   coordAddress,
+  createFlat,
+  type CreateFlatResult,
   displayValue,
+  editFlat,
+  findCoveringFlat,
   rawToInput,
   readCellInput,
+  removeFlat,
   setCell,
 } from '../model/sheet';
 
@@ -52,6 +60,9 @@ export class SheetController {
   // counter, mirroring the `rev` pattern; bumped on every navigate/rebind.
   private readonly nav = new Map<AxisId, Index>();
   navVersion = $state(0);
+
+  // Whether the "define a constant (fiber)" dialog is open (§14 FlatDialog).
+  flatDialogOpen = $state(false);
 
   // Registered by the Grid so active-cell changes can scroll into view / refocus.
   onEnsureVisible: (() => void) | undefined;
@@ -193,10 +204,28 @@ export class SheetController {
     this.editing = false;
     this.onGridFocus?.();
   }
+  /**
+   * Write a value to a coordinate (§16). If the coordinate is covered by a fiber, the
+   * write edits the *whole fiber* — a non-empty value changes the shared value (every
+   * covered cell updates at once), an empty value removes the fiber. This is why
+   * editing any member updates the whole fiber, and why a per-cell explicit override
+   * of a fibered coordinate can't be created (a non-goal, §9). Otherwise it's an
+   * ordinary explicit-cell write.
+   */
+  private write(coord: Coord, input: CellInput): void {
+    const flat = findCoveringFlat(this.sheet, coord);
+    if (flat) {
+      if (input.kind === 'empty') removeFlat(this.sheet, flat.id);
+      else editFlat(this.sheet, flat.id, input);
+    } else {
+      setCell(this.sheet, coord, input);
+    }
+    this.rev++;
+  }
+
   /** Write the edit buffer to the active cell and leave edit mode (no focus move). */
   private commitBuffer(): void {
-    setCell(this.sheet, this.activeCoord(), rawToInput(this.editBuffer));
-    this.rev++;
+    this.write(this.activeCoord(), rawToInput(this.editBuffer));
     this.editing = false;
   }
   commitEdit(move?: Move): void {
@@ -206,7 +235,41 @@ export class SheetController {
   }
   /** Delete/Backspace on a selected cell: clear it without entering edit mode. */
   clearActive(): void {
-    setCell(this.sheet, this.activeCoord(), { kind: 'empty' });
-    this.rev++;
+    this.write(this.activeCoord(), { kind: 'empty' });
+  }
+
+  // --- Fibers (§9, §14) ---------------------------------------------------------
+
+  openFlatDialog(): void {
+    this.flatDialogOpen = true;
+  }
+  closeFlatDialog(): void {
+    this.flatDialogOpen = false;
+    this.onGridFocus?.();
+  }
+
+  /**
+   * Define a fiber from the active cell: every axis is pinned to the active cell's
+   * current index except those in `freeAxisIds`, which the fiber spans whole. The
+   * shared value is `raw`. Returns the §9 invariant result so the dialog can surface
+   * an overlap or offer to absorb colliding explicit cells (`absorb`).
+   */
+  createFiber(freeAxisIds: AxisId[], raw: string, absorb = false): CreateFlatResult {
+    if (this.editing) this.commitBuffer();
+    const coord = this.activeCoord();
+    const pins = new Map<AxisId, Index>();
+    const free = new Set<AxisId>();
+    for (const axis of this.sheet.axes) {
+      if (freeAxisIds.includes(axis.id)) free.add(axis.id);
+      else pins.set(axis.id, coord.get(axis.id)!);
+    }
+    const flat: Flat = { id: crypto.randomUUID(), pins, free, input: rawToInput(raw) };
+    const result = createFlat(this.sheet, flat, { absorb });
+    if (result.ok) {
+      this.rev++;
+      this.flatDialogOpen = false;
+      this.onGridFocus?.();
+    }
+    return result;
   }
 }

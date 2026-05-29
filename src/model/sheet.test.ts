@@ -2,13 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
   coordAddress,
   coordToCellKey,
+  coveredExplicitKeys,
+  createFlat,
   createSeedSheet,
   displayValue,
+  editFlat,
   rawToInput,
+  readCell,
   readCellInput,
+  removeFlat,
   setCell,
 } from './sheet';
-import type { Coord } from '../engine/types';
+import type { Coord, Flat } from '../engine/types';
 
 describe('coordToCellKey', () => {
   it('maps a full index coordinate to a stable identity key', () => {
@@ -112,5 +117,119 @@ describe('coordAddress', () => {
     const sheet = createSeedSheet();
     // axis-row is position 0 (letter x), axis-col position 1 (letter y).
     expect(coordAddress(sheet.axes, new Map([['axis-row', 2], ['axis-col', 3]]))).toBe('x2y3');
+  });
+});
+
+// Full n-D coordinate helper for the 3-axis seed.
+const at = (r: number, c: number, p = 1): Coord =>
+  new Map([
+    ['axis-row', r],
+    ['axis-col', c],
+    ['axis-page', p],
+  ]);
+
+describe('readCell (order-free resolution: explicit → fiber → empty)', () => {
+  const sheet = createSeedSheet();
+
+  it('returns explicit values with source "explicit"', () => {
+    expect(readCell(sheet, at(1, 1))).toEqual({
+      input: { kind: 'literal', raw: 'maimadion' },
+      source: 'explicit',
+    });
+  });
+
+  it('resolves the seeded column fiber across every row, with source "flat"', () => {
+    // The seed fiber pins col 12 / page 1, free on rows → same value in any row.
+    expect(readCell(sheet, at(1, 12))).toEqual({
+      input: { kind: 'literal', raw: 'shared' },
+      source: 'flat',
+    });
+    expect(readCell(sheet, at(40, 12))).toEqual({
+      input: { kind: 'literal', raw: 'shared' },
+      source: 'flat',
+    });
+  });
+
+  it('does not extend the fiber past its pinned axes', () => {
+    expect(readCell(sheet, at(1, 12, 2)).source).toBe('empty'); // pinned to page 1
+    expect(readCell(sheet, at(1, 11)).source).toBe('empty'); // pinned to col 12
+  });
+});
+
+describe('createFlat invariants (§9)', () => {
+  const newFlat = (id: string, pins: [string, number][], free: string[], raw: string): Flat => ({
+    id,
+    pins: new Map(pins),
+    free: new Set(free),
+    input: { kind: 'literal', raw },
+  });
+
+  it('creates a non-colliding fiber', () => {
+    const sheet = createSeedSheet();
+    const flat = newFlat('f1', [['axis-col', 13], ['axis-page', 1]], ['axis-row'], 'hdr');
+    expect(createFlat(sheet, flat)).toEqual({ ok: true });
+    expect(readCellInput(sheet, at(7, 13))).toEqual({ kind: 'literal', raw: 'hdr' });
+  });
+
+  it('rejects a fiber overlapping the seeded one (no override)', () => {
+    const sheet = createSeedSheet();
+    // Same column/page as the seed fiber → shares coordinates.
+    const flat = newFlat('f2', [['axis-col', 12], ['axis-page', 1]], ['axis-row'], 'clash');
+    expect(createFlat(sheet, flat)).toEqual({ ok: false, reason: 'fiber-overlap' });
+    expect(sheet.flats).toHaveLength(1); // not added
+  });
+
+  it('rejects a fiber covering explicit cells, then absorbs them on overwrite', () => {
+    const sheet = createSeedSheet();
+    // Free on rows, col 1, page 1 → covers explicit (1,1)="maimadion".
+    const flat = newFlat('f3', [['axis-col', 1], ['axis-page', 1]], ['axis-row'], 'label');
+    const blocked = createFlat(sheet, flat);
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok && blocked.reason === 'explicit-collision') {
+      expect(blocked.keys.length).toBeGreaterThan(0);
+    } else {
+      throw new Error('expected explicit-collision');
+    }
+    // Overwrite: the colliding explicit cell is absorbed (deleted); the fiber wins.
+    expect(createFlat(sheet, flat, { absorb: true })).toEqual({ ok: true });
+    expect(readCell(sheet, at(1, 1))).toEqual({
+      input: { kind: 'literal', raw: 'label' },
+      source: 'flat',
+    });
+  });
+});
+
+describe('coveredExplicitKeys', () => {
+  it('lists exactly the explicit cells inside a fiber coverage', () => {
+    const sheet = createSeedSheet();
+    setCell(sheet, at(3, 20), rawToInput('a'));
+    setCell(sheet, at(9, 20), rawToInput('b'));
+    setCell(sheet, at(9, 21), rawToInput('c')); // different column — not covered
+    const flat: Flat = {
+      id: 'cov',
+      pins: new Map([['axis-col', 20], ['axis-page', 1]]),
+      free: new Set(['axis-row']),
+      input: { kind: 'literal', raw: 'x' },
+    };
+    const keys = coveredExplicitKeys(sheet, flat);
+    expect(new Set(keys)).toEqual(
+      new Set([coordToCellKey(sheet.axes, at(3, 20)), coordToCellKey(sheet.axes, at(9, 20))]),
+    );
+  });
+});
+
+describe('editFlat / removeFlat', () => {
+  it('editing a fiber updates every covered cell at once', () => {
+    const sheet = createSeedSheet();
+    editFlat(sheet, 'flat-seed-col', { kind: 'literal', raw: 'renamed' });
+    expect(readCellInput(sheet, at(1, 12))).toEqual({ kind: 'literal', raw: 'renamed' });
+    expect(readCellInput(sheet, at(50, 12))).toEqual({ kind: 'literal', raw: 'renamed' });
+  });
+
+  it('removing a fiber reverts its coordinates to empty', () => {
+    const sheet = createSeedSheet();
+    removeFlat(sheet, 'flat-seed-col');
+    expect(readCell(sheet, at(1, 12)).source).toBe('empty');
+    expect(sheet.flats).toHaveLength(0);
   });
 });

@@ -4,7 +4,7 @@
 
 import { axisLetter } from '../engine/coord';
 import type { Index, Sheet } from '../engine/types';
-import { displayValue, readCellInput } from '../model/sheet';
+import { displayValue, readCell } from '../model/sheet';
 import { coordAt, type Projection } from './projection';
 
 export const LAYOUT = {
@@ -22,6 +22,7 @@ const COLORS = {
   gutterBorder: '#cfcfcf',
   accent: '#1a73e8', // active-cell outline + active header
   accentBg: '#e8f0fe', // active header background
+  flatBg: '#fef7e0', // subtle tint marking a fiber-covered cell (§13)
 } as const;
 
 export interface RenderParams {
@@ -91,6 +92,18 @@ export function render(p: RenderParams): void {
   ctx.rect(headerW, headerH, bodyW, bodyH);
   ctx.clip();
 
+  // Fiber-covered cells get a subtle background tint (§13), drawn under the
+  // gridlines so a constant is visible as a band across its spanned axis.
+  ctx.fillStyle = COLORS.flatBg;
+  for (let r = firstRow; r <= lastRow; r++) {
+    const y = headerH + r * rowH - scrollTop;
+    for (let c = firstCol; c <= lastCol; c++) {
+      if (readCell(sheet, coordAt(view, r + 1, c + 1)).source !== 'flat') continue;
+      const x = headerW + c * colW - scrollLeft;
+      ctx.fillRect(x, y, colW, rowH);
+    }
+  }
+
   ctx.strokeStyle = COLORS.gridline;
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -111,7 +124,7 @@ export function render(p: RenderParams): void {
   for (let r = firstRow; r <= lastRow; r++) {
     const y = headerH + r * rowH - scrollTop;
     for (let c = firstCol; c <= lastCol; c++) {
-      const text = displayValue(readCellInput(sheet, coordAt(view, r + 1, c + 1)));
+      const text = displayValue(readCell(sheet, coordAt(view, r + 1, c + 1)).input);
       if (!text) continue;
       const x = headerW + c * colW - scrollLeft;
       ctx.save();

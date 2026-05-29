@@ -104,6 +104,7 @@ Each capability is marked **[v1]**, **[v1.1]**, or **[deferred]**.
 | Charts | deferred |
 | Real-time collaboration | deferred |
 | Import / export of established spreadsheet formats | deferred |
+| Aliased gutter labels (A/B/C… columns, 1/2/3… rows toggle) | deferred |
 
 ---
 

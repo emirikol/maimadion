@@ -5,7 +5,7 @@
 // (explicit → covering Flat → empty), formula evaluation, and #REF! arrive with
 // M4–M6; until then there are no formulas or flats in the seed.
 
-import { encodeCellKey } from '../engine/coord';
+import { axisLetter, encodeCellKey } from '../engine/coord';
 import type {
   Axis,
   CellInput,
@@ -42,6 +42,40 @@ export function coordToCellKey(axes: Axis[], coord: Coord): CellKey {
 /** M1 placeholder read: explicit cell, else empty. No flats/formulas yet. */
 export function readCellInput(sheet: Sheet, coord: Coord): CellInput {
   return sheet.cells.get(coordToCellKey(sheet.axes, coord)) ?? { kind: 'empty' };
+}
+
+/**
+ * Turn the raw text a user typed into a cell input. M2 is literals only:
+ * blank clears the cell (empty), anything else is stored verbatim as a literal.
+ * Formula recognition (a leading `=`) arrives with the engine in M5.
+ */
+export function rawToInput(raw: string): CellInput {
+  return raw === '' ? { kind: 'empty' } : { kind: 'literal', raw };
+}
+
+/**
+ * M2 placeholder write: mutate the in-memory cell store directly. The real
+ * discrete-op + undo system (§10) and the worker-owned store (§11) replace this
+ * in M7. Writing `empty` deletes the key so the store stays sparse.
+ */
+export function setCell(sheet: Sheet, coord: Coord, input: CellInput): void {
+  const key = coordToCellKey(sheet.axes, coord);
+  if (input.kind === 'empty') sheet.cells.delete(key);
+  else sheet.cells.set(key, input);
+}
+
+/**
+ * Fully-qualified display address for a coordinate: `<letter><index>` per axis in
+ * axis order, e.g. `x2y3`. Letters come from the axis-position codec (§4). Axes
+ * absent from the coord are skipped (none are, for a full coordinate).
+ */
+export function coordAddress(axes: Axis[], coord: Coord): string {
+  return axes
+    .map((axis, position) => {
+      const index = coord.get(axis.id);
+      return index === undefined ? '' : `${axisLetter(position)}${index}`;
+    })
+    .join('');
 }
 
 /** The string a cell shows. M1 has no evaluation, so a formula shows its source. */

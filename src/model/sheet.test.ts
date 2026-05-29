@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { coordToCellKey, createSeedSheet, displayValue, readCellInput } from './sheet';
+import {
+  coordAddress,
+  coordToCellKey,
+  createSeedSheet,
+  displayValue,
+  rawToInput,
+  readCellInput,
+  setCell,
+} from './sheet';
 import type { Coord } from '../engine/types';
 
 describe('coordToCellKey', () => {
@@ -46,5 +54,52 @@ describe('displayValue', () => {
     expect(displayValue({ kind: 'empty' })).toBe('');
     expect(displayValue({ kind: 'literal', raw: '42' })).toBe('42');
     expect(displayValue({ kind: 'formula', src: '=1+2', ast: { kind: 'num', n: 3 } })).toBe('=1+2');
+  });
+});
+
+describe('rawToInput', () => {
+  it('maps blank text to empty and clears the cell', () => {
+    expect(rawToInput('')).toEqual({ kind: 'empty' });
+  });
+
+  it('stores anything else as a literal verbatim (no formula parsing in M2)', () => {
+    expect(rawToInput('42')).toEqual({ kind: 'literal', raw: '42' });
+    expect(rawToInput('=1+2')).toEqual({ kind: 'literal', raw: '=1+2' });
+  });
+});
+
+describe('setCell', () => {
+  const at = (r: number, c: number): Coord =>
+    new Map([
+      ['axis-row', r],
+      ['axis-col', c],
+    ]);
+
+  it('writes a literal that reads back at the same coordinate', () => {
+    const sheet = createSeedSheet();
+    setCell(sheet, at(10, 10), rawToInput('typed'));
+    expect(readCellInput(sheet, at(10, 10))).toEqual({ kind: 'literal', raw: 'typed' });
+  });
+
+  it('overwrites an existing literal', () => {
+    const sheet = createSeedSheet();
+    setCell(sheet, at(1, 1), rawToInput('changed'));
+    expect(readCellInput(sheet, at(1, 1))).toEqual({ kind: 'literal', raw: 'changed' });
+  });
+
+  it('clears a cell (and the sparse key) when given empty', () => {
+    const sheet = createSeedSheet();
+    const before = sheet.cells.size;
+    setCell(sheet, at(1, 1), { kind: 'empty' });
+    expect(readCellInput(sheet, at(1, 1))).toEqual({ kind: 'empty' });
+    expect(sheet.cells.size).toBe(before - 1);
+  });
+});
+
+describe('coordAddress', () => {
+  it('renders <letter><index> per axis in axis order', () => {
+    const sheet = createSeedSheet();
+    // axis-row is position 0 (letter x), axis-col position 1 (letter y).
+    expect(coordAddress(sheet.axes, new Map([['axis-row', 2], ['axis-col', 3]]))).toBe('x2y3');
   });
 });

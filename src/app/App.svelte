@@ -1,17 +1,39 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import Grid from '../grid/Grid.svelte';
-  import { createSeedSheet } from '../model/sheet';
+  import FormulaBar from '../ui/FormulaBar.svelte';
+  import { SheetController } from './controller.svelte';
+  import { coordAt } from '../grid/projection';
+  import { createSeedSheet, displayValue, readCellInput } from '../model/sheet';
 
-  const sheet = createSeedSheet();
+  const controller = new SheetController(createSeedSheet());
+
+  interface MaiTestApi {
+    active(): { row: number; col: number };
+    select(row: number, col: number): void;
+    cellText(row: number, col: number): string;
+  }
+
+  onMount(() => {
+    // Window test API (tech-design §17): canvas cells aren't DOM-queryable, so e2e
+    // reads cell text and drives selection through this hook. Formalized in M10.
+    (window as unknown as { __mai: MaiTestApi }).__mai = {
+      active: () => ({ row: controller.activeRow, col: controller.activeCol }),
+      select: (row, col) => controller.select(row, col),
+      cellText: (row, col) =>
+        displayValue(readCellInput(controller.sheet, coordAt(controller.sheet.viewport, row, col))),
+    };
+  });
 </script>
 
 <div class="app">
   <header>
     <h1>maimadion</h1>
-    <span>M1 — static grid</span>
+    <span>M2 — edit literals</span>
   </header>
+  <FormulaBar {controller} />
   <div class="grid-host">
-    <Grid {sheet} />
+    <Grid {controller} />
   </div>
 </div>
 

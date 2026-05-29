@@ -33,10 +33,12 @@ describe('coordToCellKey', () => {
 
 describe('readCellInput', () => {
   const sheet = createSeedSheet();
-  const at = (r: number, c: number): Coord =>
+  // Full n-D coordinate — every axis (incl. the hidden page axis) named.
+  const at = (r: number, c: number, p = 1): Coord =>
     new Map([
       ['axis-row', r],
       ['axis-col', c],
+      ['axis-page', p],
     ]);
 
   it('returns the seeded literal at a populated coordinate', () => {
@@ -44,8 +46,16 @@ describe('readCellInput', () => {
     expect(readCellInput(sheet, at(3, 2))).toEqual({ kind: 'literal', raw: '42' });
   });
 
+  it('reads a different value on another page (the navigated dimension)', () => {
+    expect(readCellInput(sheet, at(1, 1, 2))).toEqual({ kind: 'literal', raw: 'page two' });
+    expect(readCellInput(sheet, at(2, 2, 2))).toEqual({ kind: 'literal', raw: 'alpha' });
+    // (1,1) on z=1 differs from (1,1) on z=2 — proof the page axis is part of the key.
+    expect(readCellInput(sheet, at(1, 1, 1))).not.toEqual(readCellInput(sheet, at(1, 1, 2)));
+  });
+
   it('returns empty at an unpopulated coordinate (sparse)', () => {
     expect(readCellInput(sheet, at(10, 10))).toEqual({ kind: 'empty' });
+    expect(readCellInput(sheet, at(3, 2, 2))).toEqual({ kind: 'empty' }); // 42 lives only on z=1
   });
 });
 
@@ -69,10 +79,11 @@ describe('rawToInput', () => {
 });
 
 describe('setCell', () => {
-  const at = (r: number, c: number): Coord =>
+  const at = (r: number, c: number, p = 1): Coord =>
     new Map([
       ['axis-row', r],
       ['axis-col', c],
+      ['axis-page', p],
     ]);
 
   it('writes a literal that reads back at the same coordinate', () => {

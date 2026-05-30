@@ -54,7 +54,7 @@ DependencyGraph (session, derived)
 
 - A Coordinate keys on axis-ids and position-indices, never on names. Renaming
   an axis never invalidates a reference.
-- Deleting a position or axis turns dependent references into `#REF!`.
+- Deleting a referenced position turns dependent references into `#REF!`.
 - A Coordinate is covered by at most one fiber, and never by both a fiber and an
   explicit cell value (see §6).
 

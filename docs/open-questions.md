@@ -36,9 +36,10 @@ items are not added here unless a real choice remains open.
 - **Formula trigger** is `=`. **Exponentiation `^`** is not in v1 unless it
   falls out of the parser for free.
 - **Axis/position management:** lightweight in-app UI (panel/dialog, not a
-  browser prompt); axes are created/renamed/deleted but **not reordered**;
-  positions are added/deleted with spreadsheet-standard reference adjustment
-  (deleting a referenced position → `#REF!`).
+  browser prompt); axes are created/renamed and deleted when unused (only their
+  first position holds data), but **not reordered**; positions are added/deleted
+  with spreadsheet-standard reference adjustment (deleting a referenced position
+  → `#REF!`).
 - **Fill handle with series detection** is v1.1; **reference highlighting** and
   **external TSV/CSV value paste** are deferred.
 - **Undo** is session-only in v1; persisted undo is a later consideration.

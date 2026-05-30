@@ -155,9 +155,16 @@ keyings interact, by design.
   shows `#REF!` in that component). Components with `index > k` shift `-1`. A
   range whose span collapses to empty becomes `#REF!`.
 
-**Rename axis / Delete axis:** rename touches `name` only (never a key — nothing
-to adjust). Delete axis removes it from `axes`, drops all cells/fibers/refs
-mentioning it; any formula referencing the axis → `#REF!`.
+**Append axis / rename axis / delete axis:** appending adds an axis to the end of
+`axes` and rebuilds every cell key onto its first position (each populated cell
+gains the new axis's first `PositionId`) — O(populated cells); the model permits a
+lazy/background backfill (a missing trailing-axis component reads as the first
+position until the rewrite lands) as a later optimization. Rename touches `name`
+only (never a key — nothing to adjust). Deleting an axis is the inverse of append
+and is allowed only when the axis is **unused** (only its first position holds
+data): it drops that axis from every key and reference — a lossless collapse, no
+`#REF!`. Reordering an axis, and deleting an axis that holds data, are deferred
+(§18) — both a whole-sheet rebuild.
 
 `#REF!` is produced at **resolve time** (§6) from these conditions, not stored as
 a sentinel index — the AST keeps the dead marker so the source round-trips for
@@ -476,8 +483,8 @@ flows to/from the worker via the RPC client. Components:
   (drag = navigate; the handle doubles as constant-fill across that dimension,
   which writes **independent cells**, not a fiber); **cell-as-dropdown** — open any
   cell along a perpendicular dimension to view/navigate/edit its values there.
-- **AxisPanel** — create/rename/delete axes (no reorder); insert/delete positions
-  (with §3 adjustment); lightweight in-app panel, not `prompt()`.
+- **AxisPanel** — append/rename axes, delete an unused axis (no reorder); insert/
+  delete positions (with §3 adjustment); lightweight in-app panel, not `prompt()`.
 - **FlatDialog** — define/edit a fiber; surfaces overlap errors and the
   absorb-on-overwrite option (§9).
 - **SavedIndicator** — reflects the debounced persistence state (§15).
@@ -568,30 +575,34 @@ src/
 
 The same pieces as a bottom-up build, reordered into **vertical slices**: get a
 static grid on screen fast, then walk up and down the stack so progress shows
-across the board and usability problems surface early. Two rules set the order:
+across the board and usability problems surface early. Three rules set the order:
 **(1)** get pixels — and an n-D capability — visible as soon as possible;
 **(2)** don't perfect the UX (copy/paste, navigation niceties, axis management)
-before formulas exist. Until **M6** the document lives **in memory on the main
-thread** — a deliberate placeholder; the end-state is still the worker-owned
-truth of §11, migrated in one move once the slice works. "Placeholder" below
-means a simplified stand-in (direct mutation, uniform sizes, the doc used as its
-own cache) that a later milestone replaces with the real §-spec.
+before formulas exist; **(3)** once the n-D engine is proven, validate the n-D
+*interaction* — the usability that justifies the project — before hardening the
+backend (worker, persistence). The document lives **in memory on the main thread**
+through M8; edits become discrete ops behind a dispatch seam at **M7**, so the
+worker milestone (M9) moves truth behind the worker in one behavior-preserving
+swap and the renderer keeps reading a synchronous cache throughout. "Placeholder"
+below means a simplified stand-in (direct mutation, uniform sizes, the doc used as
+its own cache) that a later milestone replaces with the real §-spec.
 
 ```
-layer \ milestone   M0  M1  M2  M3  M4  M5  M6  M7  M8  M9  M10
-UI chrome            ·   ·   ●   ●   ●   ●   ·   ·   ·   ●   ◇
-Grid renderer        ·   ●   ●   ●   ·   ·   ·   ·   ·   ●   ◇
-Engine / Model       ●   ·   ●   ·   ●   ●   ●   ●   ·   ·   ◇
-Worker / Persist     ·   ·   ·   ·   ·   ·   ·   ●   ●   ·   ◇
+layer \ milestone   M0  M1  M2  M3  M4  M5  M6  M7  M8  M9  M10  M11  M12
+UI chrome            ·   ·   ●   ●   ●   ●   ·   ●   ●   ·   ·    ●    ◇
+Grid renderer        ·   ●   ●   ●   ·   ·   ·   ·   ●   ·   ·    ●    ◇
+Engine / Model       ●   ·   ●   ·   ●   ●   ●   ●   ●   ●   ·    ·    ◇
+Worker / Persist     ·   ·   ·   ·   ·   ·   ·   ·   ·   ●   ●    ·    ◇
 
 ● primary build   ◇ exercised by e2e   · untouched
-headlines:  M1 first pixels · M3–M4 n-D features (navigate, literal fibers) · M5 formulas live
+headlines:  M1 first pixels · M3–M4 n-D features · M5 formulas live · M8 n-D interaction set · M11 validated & polished
 ```
 
 The `●` cluster zig-zags — bottom (M0) → up to the renderer (M1) → up to chrome
-(M2–M3) → down to engine + chrome for the two n-D features and formulas (M4–M6) →
-down to the worker/store (M7–M8) → up to chrome/grid (M9). Each milestone ends in
-something runnable to demo.
+(M2–M3) → engine + chrome for the n-D features and formulas (M4–M6) → ops/undo and
+controller decomposition (M7) → the n-D interaction set across chrome/grid/engine
+(M8) → down to the worker and persistence (M9–M10) → up to chrome/grid for polish
+(M11) → e2e (M12). Each milestone ends in something runnable to demo.
 
 **M0 — Types (abstract).** Scaffold (Vite/Svelte/TS, Vitest, Playwright, the
 `engine/` tsconfig boundary). Core types of §2 + the `CellKey` encoding and
@@ -633,24 +644,45 @@ elision (§6). *Demo: references, `SUM` over a 1-D range, recompute on edit,
 editing a fiber recomputes its dependents. *Demo: a formula-valued fiber; a
 formula that reads a fibered cell recomputes when the fiber changes.*
 
-**M7 — Worker + ops + undo (architectural hardening).** Formalize edits as the
-discrete `Op` set with `invert` + undo log + §3 reference adjustment (§10),
-replacing the M2 placeholder writes; then move truth behind the worker: Comlink
-`WorkerApi`, the real `SliceCache`, optimistic apply/reconcile (§11). *Demo:
-unchanged behavior + undo/redo; heavy state off the UI thread, large sheets stay
-smooth.*
+**M7 — Operations, undo & controller decomposition.** Formalize edits as the
+discrete `Op` set with `invert` + a linear undo log + §3 reference adjustment
+(§10), replacing the direct in-memory writes, and route every write through a
+single op-dispatch seam. Decompose `SheetController` into focused units — view/
+projection state, interaction/selection state, a document-edit API, and the
+computed cache — so the seam has a clear home and the M9 worker swap stays
+contained. The document still applies ops in memory on the main thread. *Demo:
+unchanged behavior + undo/redo at logical-edit granularity.*
 
-**M8 — Persistence.** IndexedDB (`idb`) schema, debounced save, saved indicator,
-recompute-on-load (§15). *Demo: close and reopen; the sheet is restored.*
+**M8 — n-D interaction & structural editing.** The interaction set that proves the
+n-D UX, now that edits are ops: the **cell-as-dropdown** navigator (the second v1
+navigator) — open any cell along a perpendicular dimension to view/navigate/edit;
+**insert-by-click** references while editing a formula (§16); the **AxisPanel** —
+append and rename axes, delete an unused axis, insert/delete positions with §3
+reference adjustment (§14); **copy/paste** with relative/absolute adjustment and
+**constant/slider-drag fill** (§16); header resize. Appending an axis rebuilds the
+cell keys onto its first position (§3). *Demo: drive the n-D sheet end-to-end —
+open a cell along a hidden axis, manage axes and positions, copy a formula with
+`$`-adjustment, all undoable.*
 
-**M9 — Full UX baseline.** The deferred niceties, now that the substrate is real:
-copy/paste with `$`-adjustment, constant + slider-drag fill, insert-by-click
-(§16); axis/position management panel with structural adjustment (§§3, 14); the
-cell-as-dropdown navigator (the second v1 navigator, intentionally late); header
-resize and fill-handle overlay (§13). *Demo: the v1 interaction set.*
+**M9 — Worker boundary.** Move the document truth behind the worker (§11): Comlink
+`WorkerApi`, the real `SliceCache`, optimistic apply/reconcile, and incremental
+range-descriptor-driven recompute (§8). The M7 op-dispatch seam makes this a
+behavior-preserving swap; the renderer keeps reading a synchronous cache. *Demo:
+unchanged behavior; heavy state off the UI thread, large sheets stay smooth.*
 
-**M10 — e2e + acceptance.** Window test API; drive Playwright through every
-acceptance criterion (§19).
+**M10 — Persistence.** IndexedDB (`idb`) schema, debounced save with a visible
+saved indicator, recompute-on-load (§15). *Demo: close and reopen; the sheet is
+restored.*
+
+**M11 — UI polish & validation.** With the full n-D interaction set real, evaluate
+and refine the usability that justifies the project: self-evaluation against
+`worked-example.md`, human feedback, and iterative improvement of the navigators,
+axis/position management, selection, and fill. Pull in the deferred niceties that
+prove out (fill handle with series detection, §13). *Demo: the v1 interaction set,
+refined against real use.*
+
+**M12 — e2e & acceptance.** Window test API; drive Playwright through every
+acceptance criterion (§19, `requirements.md` §4).
 
 ---
 
@@ -674,4 +706,4 @@ Maps `requirements.md` §4 (1–15) to the realizing section(s).
 | 12 | Define a fiber; edits whole; overlap reported | §9, §14 |
 | 13 | Frozen header gutters while scrolling | §13 |
 | 14 | Reload restores axes/positions/cells/fibers/viewport | §15 |
-| 15 | Remove referenced position/axis → `#REF!`, rest works | §3, §6 |
+| 15 | Remove a referenced position → `#REF!`, rest works | §3, §6 |

@@ -17,10 +17,11 @@ rather than dictated by the user, it is marked _(proposed)_.
 - Each **Axis** has a stable identity (independent of its name) and an ordered
   list of **positions**. Positions are addressed by 1-based index.
 - **Axis/position management** happens through lightweight in-app UI (a panel or
-  dialog, not a browser `prompt`). Axes can be created, renamed, and deleted but
-  **not reordered**. Positions can be added and deleted; structural edits adjust
-  references as in established spreadsheets (deleting a referenced position
-  yields `#REF!`). A position's label is ordinary cell data.
+  dialog, not a browser `prompt`). Axes can be created, renamed, and deleted when
+  unused (only their first position holds data), but **not reordered**. Positions
+  can be added and deleted; structural edits adjust references as in established
+  spreadsheets (deleting a referenced position yields `#REF!`). A position's label
+  is ordinary cell data.
 - A **Coordinate** is one position per axis; it identifies exactly one cell.
 - A **Cell** holds exactly one of: empty, a literal (number or text), or a
   formula. A formula may evaluate to a value or to an error.
@@ -106,6 +107,7 @@ Each capability is marked **[v1]**, **[v1.1]**, or **[deferred]**.
 | Import / export of established spreadsheet formats | deferred |
 | Aliased gutter labels (A/B/C… columns, 1/2/3… rows toggle) | deferred |
 | Cell drilldown (per-cell configured axis view + back navigation) | deferred |
+| Reorder axes, or delete a populated axis (whole-sheet rebuild) | deferred |
 
 ---
 
@@ -174,5 +176,5 @@ A reviewer should be able to confirm each item.
 13. Header gutters stay visible while scrolling a large axis.
 14. Close and reopen the app; the sheet is restored (axes, positions, cells,
     fibers, viewport binding, navigated positions).
-15. Remove a referenced position or axis; dependents become `#REF!` while the
-    rest of the sheet keeps working.
+15. Remove a referenced position; dependents become `#REF!` while the rest of
+    the sheet keeps working.

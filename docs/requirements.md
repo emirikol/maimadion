@@ -105,6 +105,7 @@ Each capability is marked **[v1]**, **[v1.1]**, or **[deferred]**.
 | Real-time collaboration | deferred |
 | Import / export of established spreadsheet formats | deferred |
 | Aliased gutter labels (A/B/C… columns, 1/2/3… rows toggle) | deferred |
+| Cell drilldown (per-cell configured axis view + back navigation) | deferred |
 
 ---
 

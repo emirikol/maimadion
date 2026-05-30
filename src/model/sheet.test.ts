@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  computedAt,
   coordAddress,
   coordToCellKey,
   coveredExplicitKeys,
@@ -7,9 +8,11 @@ import {
   createSeedSheet,
   displayValue,
   editFlat,
+  parseInput,
   rawToInput,
   readCell,
   readCellInput,
+  recomputeSheet,
   removeFlat,
   setCell,
 } from './sheet';
@@ -231,5 +234,60 @@ describe('editFlat / removeFlat', () => {
     removeFlat(sheet, 'flat-seed-col');
     expect(readCell(sheet, at(1, 12)).source).toBe('empty');
     expect(sheet.flats).toHaveLength(0);
+  });
+});
+
+describe('parseInput', () => {
+  const sheet = createSeedSheet();
+  it('maps blank → empty, plain text → literal, "=" → formula', () => {
+    expect(parseInput('', at(1, 1), sheet.axes)).toEqual({ kind: 'empty' });
+    expect(parseInput('42', at(1, 1), sheet.axes)).toEqual({ kind: 'literal', raw: '42' });
+    expect(parseInput('=1+2', at(1, 1), sheet.axes)).toMatchObject({ kind: 'formula' });
+  });
+  it('stores a malformed formula as an error formula (#NAME?)', () => {
+    expect(parseInput('=oops(', at(1, 1), sheet.axes)).toMatchObject({
+      kind: 'formula',
+      ast: { kind: 'error', code: '#NAME?' },
+    });
+  });
+});
+
+describe('formulas: recompute + computedAt', () => {
+  const number = (n: number) => ({ value: { kind: 'number', n } });
+
+  it('values the seeded SUM over a 1-D range and its dependent product', () => {
+    const sheet = createSeedSheet();
+    const computed = recomputeSheet(sheet);
+    expect(computedAt(sheet, computed, at(13, 1))).toEqual(number(600)); // SUM(100,200,300)
+    expect(computedAt(sheet, computed, at(14, 1))).toEqual(number(1200)); // = SUM * 2
+  });
+
+  it('recomputes dependents in order when a referenced cell changes', () => {
+    const sheet = createSeedSheet();
+    setCell(sheet, at(10, 1), { kind: 'literal', raw: '150' }); // was 100
+    const computed = recomputeSheet(sheet);
+    expect(computedAt(sheet, computed, at(13, 1))).toEqual(number(650));
+    expect(computedAt(sheet, computed, at(14, 1))).toEqual(number(1300));
+  });
+
+  it('surfaces #DIV/0! and a circular reference as #CYCLE!', () => {
+    const sheet = createSeedSheet();
+    setCell(sheet, at(20, 1), parseInput('=1/0', at(20, 1), sheet.axes));
+    setCell(sheet, at(21, 1), parseInput('=x22y1z1', at(21, 1), sheet.axes));
+    setCell(sheet, at(22, 1), parseInput('=x21y1z1', at(22, 1), sheet.axes));
+    const computed = recomputeSheet(sheet);
+    expect(computedAt(sheet, computed, at(20, 1))).toEqual({ error: '#DIV/0!' });
+    expect(computedAt(sheet, computed, at(21, 1))).toEqual({ error: '#CYCLE!' });
+    expect(computedAt(sheet, computed, at(22, 1))).toEqual({ error: '#CYCLE!' });
+  });
+
+  it('reads a fibered cell from inside a formula', () => {
+    const sheet = createSeedSheet();
+    // The seed fiber holds the text "shared" down column 12; a formula referencing a
+    // numeric fiber would sum it — here we just confirm the fiber value is readable.
+    editFlat(sheet, 'flat-seed-col', { kind: 'literal', raw: '50' });
+    setCell(sheet, at(30, 1), parseInput('=x1y12z1 + 5', at(30, 1), sheet.axes));
+    const computed = recomputeSheet(sheet);
+    expect(computedAt(sheet, computed, at(30, 1))).toEqual(number(55));
   });
 });

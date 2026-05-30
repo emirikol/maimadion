@@ -7,11 +7,15 @@
 // the §10 discrete-op + undo system and the §11 worker-owned store, both M7).
 
 import { axisLetter, decodeCellKey, encodeCellKey } from '../engine/coord';
+import { recompute } from '../engine/depgraph';
 import { covers, flatsOverlap } from '../engine/fiber';
+import { compileFormula } from '../engine/formula';
+import { literalToValue } from '../engine/value';
 import type {
   Axis,
   CellInput,
   CellKey,
+  Computed,
   Coord,
   Flat,
   FlatId,
@@ -75,12 +79,23 @@ export function readCellInput(sheet: Sheet, coord: Coord): CellInput {
 }
 
 /**
- * Turn the raw text a user typed into a cell input. M2 is literals only:
- * blank clears the cell (empty), anything else is stored verbatim as a literal.
- * Formula recognition (a leading `=`) arrives with the engine in M5.
+ * Turn raw text into a literal/empty input (no formula parsing). Used where formulas
+ * are out of scope — fiber values in M5 (formula-valued fibers are M6).
  */
 export function rawToInput(raw: string): CellInput {
   return raw === '' ? { kind: 'empty' } : { kind: 'literal', raw };
+}
+
+/**
+ * Turn raw cell text into an input (M5): blank → empty, a leading `=` → a formula
+ * compiled and expanded against `context` (the authoring active coordinate, §6),
+ * anything else → a literal. A malformed formula is stored as a formula evaluating to
+ * #NAME? (see compileFormula).
+ */
+export function parseInput(raw: string, context: Coord, axes: Axis[]): CellInput {
+  if (raw === '') return { kind: 'empty' };
+  if (raw.startsWith('=')) return compileFormula(raw.slice(1), context, axes);
+  return { kind: 'literal', raw };
 }
 
 /**
@@ -156,6 +171,53 @@ export function removeFlat(sheet: Sheet, id: FlatId): void {
   sheet.flats = sheet.flats.filter((f) => f.id !== id);
 }
 
+// --- Formula values (§7, §8) ------------------------------------------------------
+
+const EMPTY: Computed = { value: { kind: 'empty' } };
+
+/** The value of a non-formula input (a literal, or empty). Fiber inputs are literals in M5. */
+function staticInputValue(input: CellInput): Computed {
+  return input.kind === 'literal' ? { value: literalToValue(input.raw) } : EMPTY;
+}
+
+/** The non-formula value at a storage key: explicit literal, covering fiber, or empty. */
+function staticValueAt(sheet: Sheet, key: CellKey): Computed {
+  const explicit = sheet.cells.get(key);
+  if (explicit) return staticInputValue(explicit);
+  const flat = findCoveringFlat(sheet, cellKeyToCoord(sheet, key));
+  return flat ? staticInputValue(flat.input) : EMPTY;
+}
+
+/**
+ * Evaluate every formula in the sheet, returning their computed values (session-only,
+ * §2). A full recompute — the M5 placeholder for §8's incremental, worker-owned
+ * recompute (M7). Cells in or downstream of a cycle resolve to #CYCLE!.
+ */
+export function recomputeSheet(sheet: Sheet): Map<CellKey, Computed> {
+  const formulaKeys: CellKey[] = [];
+  for (const [key, input] of sheet.cells) if (input.kind === 'formula') formulaKeys.push(key);
+  return recompute({
+    formulaKeys,
+    astOf: (key) => {
+      const input = sheet.cells.get(key);
+      return input?.kind === 'formula' ? input.ast : { kind: 'num', n: 0 };
+    },
+    axes: sheet.axes,
+    staticValue: (key) => staticValueAt(sheet, key),
+  });
+}
+
+/** The computed value shown at a coordinate, given a recompute result. */
+export function computedAt(
+  sheet: Sheet,
+  computed: Map<CellKey, Computed>,
+  coord: Coord,
+): Computed {
+  const { input } = readCell(sheet, coord);
+  if (input.kind === 'formula') return computed.get(coordToCellKey(sheet.axes, coord)) ?? EMPTY;
+  return staticInputValue(input);
+}
+
 /**
  * Fully-qualified display address for a coordinate: `<letter><index>` per axis in
  * axis order, e.g. `x2y3`. Letters come from the axis-position codec (§4). Axes
@@ -192,6 +254,9 @@ export function displayValue(input: CellInput): string {
  * It also seeds one literal fiber (M4): a value held constant down a whole column
  * — `free` on the row axis, pinned to column 12 on page 1 — so the column reads the
  * same in every row, and editing any of those cells updates them all.
+ *
+ * Finally it seeds a few formulas (M5) in column 1: a small total via SUM over a
+ * 1-D row range, and a dependent product — edit a member and both recompute.
  */
 export function createSeedSheet(): Sheet {
   const row = makeAxis('axis-row', 'rows', 100);
@@ -200,13 +265,18 @@ export function createSeedSheet(): Sheet {
   const axes = [row, col, page];
 
   const cells = new Map<CellKey, CellInput>();
-  const put = (rowIndex: number, colIndex: number, pageIndex: number, raw: string) => {
-    const coord: Coord = new Map([
+  const coordOf = (rowIndex: number, colIndex: number, pageIndex: number): Coord =>
+    new Map([
       [row.id, rowIndex],
       [col.id, colIndex],
       [page.id, pageIndex],
     ]);
-    cells.set(coordToCellKey(axes, coord), { kind: 'literal', raw });
+  const put = (rowIndex: number, colIndex: number, pageIndex: number, raw: string) => {
+    cells.set(coordToCellKey(axes, coordOf(rowIndex, colIndex, pageIndex)), { kind: 'literal', raw });
+  };
+  const putFormula = (rowIndex: number, colIndex: number, pageIndex: number, body: string) => {
+    const coord = coordOf(rowIndex, colIndex, pageIndex);
+    cells.set(coordToCellKey(axes, coord), compileFormula(body, coord, axes));
   };
   // z=1 — the original M1/M2 literals.
   put(1, 1, 1, 'maimadion');
@@ -226,6 +296,12 @@ export function createSeedSheet(): Sheet {
   put(2, 2, 4, '2026');
   put(1, 1, 5, 'page five');
   put(4, 2, 5, 'last layer');
+  // z=1 formulas in column 1: three numbers, their SUM, and a dependent product.
+  put(10, 1, 1, '100');
+  put(11, 1, 1, '200');
+  put(12, 1, 1, '300');
+  putFormula(13, 1, 1, 'SUM(x10:12)'); // → 600 (sum of the three rows above)
+  putFormula(14, 1, 1, 'x13 * 2'); // → 1200 (depends on the SUM)
 
   const viewport: ViewportBinding = {
     rowAxisId: row.id,

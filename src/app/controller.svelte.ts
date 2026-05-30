@@ -10,19 +10,29 @@
 // (§11) replace that in M7.
 //
 // M4 adds fibers: an edit on a fiber-covered cell edits the whole fiber, and the
-// FlatDialog defines new ones from the active cell (§9, §14).
+// FlatDialog defines new ones from the active cell (§9, §14). M5 adds formulas: a `=`
+// edit is parsed/expanded against the active coordinate (§5/§6) and stored; the
+// controller keeps the recomputed formula values (§7/§8) so the grid shows computed
+// results while the formula bar shows the elided source.
 
-import type { AxisId, CellInput, Coord, Flat, Index, Sheet } from '../engine/types';
+import type { AxisId, CellInput, CellKey, Computed, Coord, Flat, Index, Sheet } from '../engine/types';
+import { displayFormula } from '../engine/formula';
+import { formatComputed } from '../engine/value';
 import { coordAt, type Projection } from '../grid/projection';
 import {
+  type CellSource,
+  computedAt,
   coordAddress,
   createFlat,
   type CreateFlatResult,
   displayValue,
   editFlat,
   findCoveringFlat,
+  parseInput,
   rawToInput,
+  readCell,
   readCellInput,
+  recomputeSheet,
   removeFlat,
   setCell,
 } from '../model/sheet';
@@ -50,6 +60,9 @@ export class SheetController {
   // Bumped on every data write; the renderer's $effect reads it to repaint, and
   // derived views (formula bar) re-read the cell.
   rev = $state(0);
+  // Computed formula values (session-only, §2), refreshed on every data change.
+  // Plain field — repaint is driven by `rev`, not by this map being reactive.
+  private computed = new Map<CellKey, Computed>();
 
   // The visible binding (§12). Reactive so rebinding re-projects the whole view.
   rowAxisId = $state<AxisId>('');
@@ -78,6 +91,7 @@ export class SheetController {
     for (const axis of sheet.axes) {
       this.nav.set(axis.id, navigated.get(axis.id) ?? 1);
     }
+    this.computed = recomputeSheet(this.sheet); // value the seed formulas
   }
 
   private axisOf(id: AxisId) {
@@ -116,11 +130,25 @@ export class SheetController {
     void this.rev; // make reads reactive to writes inside an effect/derived
     return readCellInput(this.sheet, this.activeCoord());
   }
+  /** What the formula bar shows/edits: a formula's elided source (§6), else the literal. */
   activeText(): string {
-    return displayValue(this.activeInput());
+    const input = this.activeInput();
+    if (input.kind === 'formula') {
+      return displayFormula(input, this.activeCoord(), this.sheet.axes);
+    }
+    return displayValue(input);
   }
   activeAddress(): string {
     return coordAddress(this.sheet.axes, this.activeCoord());
+  }
+
+  /** What a grid cell shows: the computed value, plus its source for the fiber tint (§13). */
+  cellDisplay(coord: Coord): { text: string; source: CellSource } {
+    void this.rev;
+    return {
+      text: formatComputed(computedAt(this.sheet, this.computed, coord)),
+      source: readCell(this.sheet, coord).source,
+    };
   }
 
   /**
@@ -220,12 +248,27 @@ export class SheetController {
     } else {
       setCell(this.sheet, coord, input);
     }
+    this.afterDataChange();
+  }
+
+  /** Recompute formula values and trigger a repaint after any data change. */
+  private afterDataChange(): void {
+    this.computed = recomputeSheet(this.sheet);
     this.rev++;
   }
 
-  /** Write the edit buffer to the active cell and leave edit mode (no focus move). */
+  /**
+   * Write the edit buffer to the active cell and leave edit mode (no focus move). A
+   * non-fibered cell parses `=` as a formula (§5/§6); a fibered cell holds a literal in
+   * M5 (formula-valued fibers are M6), so its buffer stays a plain value.
+   */
   private commitBuffer(): void {
-    this.write(this.activeCoord(), rawToInput(this.editBuffer));
+    const coord = this.activeCoord();
+    const fibered = findCoveringFlat(this.sheet, coord) !== undefined;
+    const input = fibered
+      ? rawToInput(this.editBuffer)
+      : parseInput(this.editBuffer, coord, this.sheet.axes);
+    this.write(coord, input);
     this.editing = false;
   }
   commitEdit(move?: Move): void {
@@ -266,7 +309,7 @@ export class SheetController {
     const flat: Flat = { id: crypto.randomUUID(), pins, free, input: rawToInput(raw) };
     const result = createFlat(this.sheet, flat, { absorb });
     if (result.ok) {
-      this.rev++;
+      this.afterDataChange();
       this.flatDialogOpen = false;
       this.onGridFocus?.();
     }

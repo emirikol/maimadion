@@ -48,6 +48,7 @@
       scrollTop,
       sheet: controller.sheet,
       view: controller.projection(),
+      read: (coord) => controller.cellDisplay(coord),
       active: { row: controller.activeRow, col: controller.activeCol },
     });
   }

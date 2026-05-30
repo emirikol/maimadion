@@ -79,7 +79,11 @@ export type Expr =
   | { kind: 'binary'; op: '+' | '-' | '*' | '/'; l: Expr; r: Expr }
   | { kind: 'call'; fn: string; args: Expr[] }
   | { kind: 'ref'; ref: CellRef }
-  | { kind: 'rangeRef'; ref: RangeRef };
+  | { kind: 'rangeRef'; ref: RangeRef }
+  // A formula that failed to parse, kept so the source round-trips for display and
+  // evaluation short-circuits to the error (typically #NAME?). Not in tech-design's
+  // Expr union — a pragmatic node so a bad formula behaves like a spreadsheet's.
+  | { kind: 'error'; code: CellError };
 
 // "Fiber" is the user-facing term; in code the technical name is `Flat` (a.k.a.
 // AffineFlat — an axis-aligned affine subspace). Identifiers never say "fiber".

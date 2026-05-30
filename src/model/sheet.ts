@@ -1,13 +1,14 @@
 // In-memory document — the placeholder the renderer reads directly.
 //
 // Stays DOM-free (this is destined for the worker later). The read path is the
-// order-free resolution chain of §9: explicit cell → covering fiber → empty. Fiber
-// `input`s are literals in M4; formula evaluation and fibers as dependency-graph
-// nodes arrive in M5/M6. The writes here are still direct mutations (placeholder for
-// the §10 discrete-op + undo system and the §11 worker-owned store, both M7).
+// order-free resolution chain of §9: explicit cell → covering fiber → empty. A fiber
+// `input` may be a literal or — since M6 — a formula, computed once and shared across
+// the whole fiber as a single depgraph node (§9). The writes here are still direct
+// mutations (placeholder for the §10 discrete-op + undo system and the §11
+// worker-owned store, both M7).
 
 import { axisLetter, decodeCellKey, encodeCellKey } from '../engine/coord';
-import { recompute } from '../engine/depgraph';
+import { type NodeId, recompute } from '../engine/depgraph';
 import { covers, flatsOverlap } from '../engine/fiber';
 import { compileFormula } from '../engine/formula';
 import { literalToValue } from '../engine/value';
@@ -17,6 +18,7 @@ import type {
   CellKey,
   Computed,
   Coord,
+  Expr,
   Flat,
   FlatId,
   PositionCoord,
@@ -79,8 +81,8 @@ export function readCellInput(sheet: Sheet, coord: Coord): CellInput {
 }
 
 /**
- * Turn raw text into a literal/empty input (no formula parsing). Used where formulas
- * are out of scope — fiber values in M5 (formula-valued fibers are M6).
+ * Turn raw text into a literal/empty input (no formula parsing). A literal-only helper
+ * for callers that never author formulas; formula entry goes through {@link parseInput}.
  */
 export function rawToInput(raw: string): CellInput {
   return raw === '' ? { kind: 'empty' } : { kind: 'literal', raw };
@@ -171,16 +173,42 @@ export function removeFlat(sheet: Sheet, id: FlatId): void {
   sheet.flats = sheet.flats.filter((f) => f.id !== id);
 }
 
-// --- Formula values (§7, §8) ------------------------------------------------------
+// --- Formula values (§7, §8, §9) --------------------------------------------------
 
 const EMPTY: Computed = { value: { kind: 'empty' } };
 
-/** The value of a non-formula input (a literal, or empty). Fiber inputs are literals in M5. */
+/** The value of a non-formula input (a literal, or empty). */
 function staticInputValue(input: CellInput): Computed {
   return input.kind === 'literal' ? { value: literalToValue(input.raw) } : EMPTY;
 }
 
-/** The non-formula value at a storage key: explicit literal, covering fiber, or empty. */
+/**
+ * The depgraph node (§8) that produces the value at a coordinate key: an explicit
+ * formula cell's own key, else a covering formula-valued fiber's id (§9 fiber-as-node).
+ * `undefined` for a leaf — a literal cell, a literal fiber, or empty — whose value
+ * comes from {@link staticValueAt}. A coordinate is never both explicit and
+ * fiber-covered (§9), so the two cases never both apply.
+ *
+ * Cell-node ids are CellKeys (which always contain ':') and fiber-node ids are FlatIds
+ * (which don't), so the two id spaces never collide.
+ */
+function nodeForKey(sheet: Sheet, key: CellKey): NodeId | undefined {
+  const explicit = sheet.cells.get(key);
+  if (explicit) return explicit.kind === 'formula' ? key : undefined;
+  const flat = findCoveringFlat(sheet, cellKeyToCoord(sheet, key));
+  return flat?.input.kind === 'formula' ? flat.id : undefined;
+}
+
+/** The formula AST at a node id (a formula cell's key, or a formula fiber's id). */
+function astOfNode(sheet: Sheet, node: NodeId): Expr {
+  const cell = sheet.cells.get(node);
+  if (cell?.kind === 'formula') return cell.ast;
+  const flat = sheet.flats.find((f) => f.id === node);
+  if (flat?.input.kind === 'formula') return flat.input.ast;
+  return { kind: 'num', n: 0 }; // unreachable: every node is one of the two
+}
+
+/** The non-formula value at a storage key: explicit literal, covering literal fiber, or empty. */
 function staticValueAt(sheet: Sheet, key: CellKey): Computed {
   const explicit = sheet.cells.get(key);
   if (explicit) return staticInputValue(explicit);
@@ -189,33 +217,40 @@ function staticValueAt(sheet: Sheet, key: CellKey): Computed {
 }
 
 /**
- * Evaluate every formula in the sheet, returning their computed values (session-only,
- * §2). A full recompute — the M5 placeholder for §8's incremental, worker-owned
- * recompute (M7). Cells in or downstream of a cycle resolve to #CYCLE!.
+ * Evaluate every formula in the sheet — explicit formula cells *and* formula-valued
+ * fibers (§9) — returning their computed values keyed by node id (session-only, §2). A
+ * full recompute, the placeholder for §8's incremental, worker-owned recompute (M7).
+ * Each formula-valued fiber is a single node: it is computed once and read by every
+ * formula that touches its covered region (§9). Nodes in or downstream of a cycle
+ * resolve to #CYCLE!.
  */
-export function recomputeSheet(sheet: Sheet): Map<CellKey, Computed> {
-  const formulaKeys: CellKey[] = [];
-  for (const [key, input] of sheet.cells) if (input.kind === 'formula') formulaKeys.push(key);
+export function recomputeSheet(sheet: Sheet): Map<NodeId, Computed> {
+  const nodes: NodeId[] = [];
+  for (const [key, input] of sheet.cells) if (input.kind === 'formula') nodes.push(key);
+  for (const flat of sheet.flats) if (flat.input.kind === 'formula') nodes.push(flat.id);
   return recompute({
-    formulaKeys,
-    astOf: (key) => {
-      const input = sheet.cells.get(key);
-      return input?.kind === 'formula' ? input.ast : { kind: 'num', n: 0 };
-    },
+    nodes,
+    astOf: (node) => astOfNode(sheet, node),
     axes: sheet.axes,
+    nodeForKey: (key) => nodeForKey(sheet, key),
     staticValue: (key) => staticValueAt(sheet, key),
   });
 }
 
-/** The computed value shown at a coordinate, given a recompute result. */
+/**
+ * The computed value shown at a coordinate, given a recompute result. A formula
+ * coordinate (an explicit formula cell, or one covered by a formula fiber) reads its
+ * producing node's value; everything else is a static leaf value.
+ */
 export function computedAt(
   sheet: Sheet,
-  computed: Map<CellKey, Computed>,
+  computed: Map<NodeId, Computed>,
   coord: Coord,
 ): Computed {
-  const { input } = readCell(sheet, coord);
-  if (input.kind === 'formula') return computed.get(coordToCellKey(sheet.axes, coord)) ?? EMPTY;
-  return staticInputValue(input);
+  const key = coordToCellKey(sheet.axes, coord);
+  const node = nodeForKey(sheet, key);
+  if (node !== undefined) return computed.get(node) ?? EMPTY;
+  return staticValueAt(sheet, key);
 }
 
 /**
@@ -255,8 +290,13 @@ export function displayValue(input: CellInput): string {
  * — `free` on the row axis, pinned to column 12 on page 1 — so the column reads the
  * same in every row, and editing any of those cells updates them all.
  *
- * Finally it seeds a few formulas (M5) in column 1: a small total via SUM over a
- * 1-D row range, and a dependent product — edit a member and both recompute.
+ * It seeds a few formulas (M5) in column 1: a small total via SUM over a 1-D row
+ * range, and a dependent product — edit a member and both recompute.
+ *
+ * Finally it seeds the M6 demo: a *formula-valued* fiber (column 9, page 1, free down
+ * the rows) whose shared value is the column-1 total, and a cell that reads the
+ * fibered column. The fiber is a single depgraph node sitting mid-chain — editing a
+ * member of the SUM recomputes the SUM, then the fiber, then the cell reading it.
  */
 export function createSeedSheet(): Sheet {
   const row = makeAxis('axis-row', 'rows', 100);
@@ -302,6 +342,9 @@ export function createSeedSheet(): Sheet {
   put(12, 1, 1, '300');
   putFormula(13, 1, 1, 'SUM(x10:12)'); // → 600 (sum of the three rows above)
   putFormula(14, 1, 1, 'x13 * 2'); // → 1200 (depends on the SUM)
+  // M6: a cell reading the formula-valued fiber defined below (column 9). It follows
+  // the fiber, which follows the SUM — editing x10 ripples through all three.
+  putFormula(16, 1, 1, 'x1y9z1 + 1'); // → 601
 
   const viewport: ViewportBinding = {
     rowAxisId: row.id,
@@ -334,5 +377,24 @@ export function createSeedSheet(): Sheet {
     input: { kind: 'literal', raw: 'shared' },
   };
 
-  return { axes, cells, flats: [columnLabel], viewport, headerSizes: new Map() };
+  // M6 — a *formula-valued* fiber: column y9, page 1, held constant down every row,
+  // its shared value the column-1 total (the SUM cell at x13). A single depgraph node:
+  // it recomputes when the SUM does, and anything reading column 9 recomputes in turn.
+  const totalFiber: Flat = {
+    id: 'flat-seed-total',
+    pins: new Map([
+      [col.id, 9],
+      [page.id, 1],
+    ]),
+    free: new Set([row.id]),
+    input: compileFormula('x13y1z1', coordOf(1, 9, 1), axes),
+  };
+
+  return {
+    axes,
+    cells,
+    flats: [columnLabel, totalFiber],
+    viewport,
+    headerSizes: new Map(),
+  };
 }

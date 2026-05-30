@@ -70,7 +70,7 @@
 <div class="app">
   <header>
     <h1>maimadion</h1>
-    <span>M5 — formulas</span>
+    <span>M6 — fibers complete</span>
   </header>
   <FormulaBar {controller} />
   <div class="view-controls">

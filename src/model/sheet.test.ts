@@ -179,7 +179,7 @@ describe('createFlat invariants (§9)', () => {
     // Same column/page as the seed fiber → shares coordinates.
     const flat = newFlat('f2', [['axis-col', 12], ['axis-page', 1]], ['axis-row'], 'clash');
     expect(createFlat(sheet, flat)).toEqual({ ok: false, reason: 'fiber-overlap' });
-    expect(sheet.flats).toHaveLength(1); // not added
+    expect(sheet.flats).toHaveLength(2); // unchanged: the two seed fibers
   });
 
   it('rejects a fiber covering explicit cells, then absorbs them on overwrite', () => {
@@ -233,7 +233,8 @@ describe('editFlat / removeFlat', () => {
     const sheet = createSeedSheet();
     removeFlat(sheet, 'flat-seed-col');
     expect(readCell(sheet, at(1, 12)).source).toBe('empty');
-    expect(sheet.flats).toHaveLength(0);
+    expect(sheet.flats.find((f) => f.id === 'flat-seed-col')).toBeUndefined();
+    expect(sheet.flats).toHaveLength(1); // the M6 formula fiber remains
   });
 });
 
@@ -289,5 +290,59 @@ describe('formulas: recompute + computedAt', () => {
     setCell(sheet, at(30, 1), parseInput('=x1y12z1 + 5', at(30, 1), sheet.axes));
     const computed = recomputeSheet(sheet);
     expect(computedAt(sheet, computed, at(30, 1))).toEqual(number(55));
+  });
+});
+
+describe('M6: formula-valued fibers (fiber-as-node, §9)', () => {
+  const number = (n: number) => ({ value: { kind: 'number', n } });
+
+  it('computes the seeded formula fiber once and shares it down the spanned axis', () => {
+    const sheet = createSeedSheet();
+    const computed = recomputeSheet(sheet);
+    // Column 9, page 1, free on rows: the column-1 SUM (600) held constant down it.
+    expect(computedAt(sheet, computed, at(1, 9))).toEqual(number(600));
+    expect(computedAt(sheet, computed, at(40, 9))).toEqual(number(600));
+    expect(readCell(sheet, at(40, 9)).source).toBe('flat'); // a fiber, not an explicit cell
+    // The seeded reader x16y1z1 = x1y9z1 + 1 follows the fiber.
+    expect(computedAt(sheet, computed, at(16, 1))).toEqual(number(601));
+  });
+
+  it('recomputes the fiber and its readers when a dependency of its formula changes', () => {
+    const sheet = createSeedSheet();
+    setCell(sheet, at(10, 1), { kind: 'literal', raw: '150' }); // 100 → 150 lifts the SUM to 650
+    const computed = recomputeSheet(sheet);
+    expect(computedAt(sheet, computed, at(13, 1))).toEqual(number(650)); // the SUM
+    expect(computedAt(sheet, computed, at(1, 9))).toEqual(number(650)); // the fiber follows
+    expect(computedAt(sheet, computed, at(16, 1))).toEqual(number(651)); // the reader follows
+  });
+
+  it('turns a literal fiber into a formula fiber when its value is edited to a formula', () => {
+    const sheet = createSeedSheet();
+    // Give the column-12 "shared" fiber a formula instead: half the column-1 SUM.
+    editFlat(sheet, 'flat-seed-col', parseInput('=x13y1z1 / 2', at(1, 12), sheet.axes));
+    const computed = recomputeSheet(sheet);
+    expect(computedAt(sheet, computed, at(1, 12))).toEqual(number(300)); // 600 / 2
+    expect(computedAt(sheet, computed, at(50, 12))).toEqual(number(300)); // held down the column
+    expect(readCell(sheet, at(50, 12)).source).toBe('flat'); // still a single fiber
+  });
+
+  it('recomputes a formula that reads a fibered cell when the fiber input changes', () => {
+    const sheet = createSeedSheet();
+    editFlat(sheet, 'flat-seed-col', parseInput('=40 + 2', at(1, 12), sheet.axes)); // fiber = 42
+    setCell(sheet, at(30, 1), parseInput('=x1y12z1 + 8', at(30, 1), sheet.axes)); // reads the fiber
+    expect(computedAt(sheet, recomputeSheet(sheet), at(30, 1))).toEqual(number(50));
+    // Change the fiber's formula → the reader recomputes.
+    editFlat(sheet, 'flat-seed-col', parseInput('=100', at(1, 12), sheet.axes));
+    expect(computedAt(sheet, recomputeSheet(sheet), at(30, 1))).toEqual(number(108));
+  });
+
+  it('reports a cycle running through a fiber as #CYCLE! without hanging', () => {
+    const sheet = createSeedSheet();
+    // The fiber's formula reads x50y1z1; that cell reads the fibered column 12 → cycle.
+    editFlat(sheet, 'flat-seed-col', parseInput('=x50y1z1', at(1, 12), sheet.axes));
+    setCell(sheet, at(50, 1), parseInput('=x1y12z1', at(50, 1), sheet.axes));
+    const computed = recomputeSheet(sheet);
+    expect(computedAt(sheet, computed, at(1, 12))).toEqual({ error: '#CYCLE!' });
+    expect(computedAt(sheet, computed, at(50, 1))).toEqual({ error: '#CYCLE!' });
   });
 });

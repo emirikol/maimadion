@@ -13,9 +13,13 @@
 // FlatDialog defines new ones from the active cell (§9, §14). M5 adds formulas: a `=`
 // edit is parsed/expanded against the active coordinate (§5/§6) and stored; the
 // controller keeps the recomputed formula values (§7/§8) so the grid shows computed
-// results while the formula bar shows the elided source.
+// results while the formula bar shows the elided source. M6 completes fibers: a fiber's
+// shared value may itself be a `=` formula (parsed the same way against the active
+// coordinate), computed once and shared, so editing a fibered cell or its dependencies
+// recomputes the whole fiber and everything reading it (§9).
 
-import type { AxisId, CellInput, CellKey, Computed, Coord, Flat, Index, Sheet } from '../engine/types';
+import type { AxisId, CellInput, Computed, Coord, Flat, Index, Sheet } from '../engine/types';
+import type { NodeId } from '../engine/depgraph';
 import { displayFormula } from '../engine/formula';
 import { formatComputed } from '../engine/value';
 import { coordAt, type Projection } from '../grid/projection';
@@ -29,7 +33,6 @@ import {
   editFlat,
   findCoveringFlat,
   parseInput,
-  rawToInput,
   readCell,
   readCellInput,
   recomputeSheet,
@@ -60,9 +63,10 @@ export class SheetController {
   // Bumped on every data write; the renderer's $effect reads it to repaint, and
   // derived views (formula bar) re-read the cell.
   rev = $state(0);
-  // Computed formula values (session-only, §2), refreshed on every data change.
-  // Plain field — repaint is driven by `rev`, not by this map being reactive.
-  private computed = new Map<CellKey, Computed>();
+  // Computed formula values (session-only, §2), keyed by depgraph node — a formula
+  // cell's key or a formula fiber's id (§9) — refreshed on every data change. Plain
+  // field — repaint is driven by `rev`, not by this map being reactive.
+  private computed = new Map<NodeId, Computed>();
 
   // The visible binding (§12). Reactive so rebinding re-projects the whole view.
   rowAxisId = $state<AxisId>('');
@@ -258,16 +262,14 @@ export class SheetController {
   }
 
   /**
-   * Write the edit buffer to the active cell and leave edit mode (no focus move). A
-   * non-fibered cell parses `=` as a formula (§5/§6); a fibered cell holds a literal in
-   * M5 (formula-valued fibers are M6), so its buffer stays a plain value.
+   * Write the edit buffer to the active cell and leave edit mode (no focus move). A `=`
+   * buffer parses as a formula expanded against the active coordinate (§5/§6); this is
+   * the same whether the cell is plain or fibered — since M6 a fiber's shared value may
+   * be a formula too (it routes through {@link write} → editFlat, §9).
    */
   private commitBuffer(): void {
     const coord = this.activeCoord();
-    const fibered = findCoveringFlat(this.sheet, coord) !== undefined;
-    const input = fibered
-      ? rawToInput(this.editBuffer)
-      : parseInput(this.editBuffer, coord, this.sheet.axes);
+    const input = parseInput(this.editBuffer, coord, this.sheet.axes);
     this.write(coord, input);
     this.editing = false;
   }
@@ -294,8 +296,9 @@ export class SheetController {
   /**
    * Define a fiber from the active cell: every axis is pinned to the active cell's
    * current index except those in `freeAxisIds`, which the fiber spans whole. The
-   * shared value is `raw`. Returns the §9 invariant result so the dialog can surface
-   * an overlap or offer to absorb colliding explicit cells (`absorb`).
+   * shared value is `raw` — a literal, or (since M6) a `=` formula expanded against the
+   * active coordinate (§9). Returns the §9 invariant result so the dialog can surface an
+   * overlap or offer to absorb colliding explicit cells (`absorb`).
    */
   createFiber(freeAxisIds: AxisId[], raw: string, absorb = false): CreateFlatResult {
     if (this.editing) this.commitBuffer();
@@ -306,7 +309,8 @@ export class SheetController {
       if (freeAxisIds.includes(axis.id)) free.add(axis.id);
       else pins.set(axis.id, coord.get(axis.id)!);
     }
-    const flat: Flat = { id: crypto.randomUUID(), pins, free, input: rawToInput(raw) };
+    const input = parseInput(raw, coord, this.sheet.axes);
+    const flat: Flat = { id: crypto.randomUUID(), pins, free, input };
     const result = createFlat(this.sheet, flat, { absorb });
     if (result.ok) {
       this.afterDataChange();

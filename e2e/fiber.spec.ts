@@ -53,7 +53,7 @@ test('M4: the seeded fiber reads the same value across its spanned axis', async 
   // Pinned to page 1: it does not bleed onto other pages.
   await page.evaluate(() => window.__mai.navigate('axis-page', 2));
   expect(await cellSource(page, 1, 12)).toBe('empty');
-  expect(await fiberCount(page)).toBe(1);
+  expect(await fiberCount(page)).toBe(2); // the literal fiber + the M6 formula fiber
 });
 
 test('M4: editing any member updates the whole fiber', async ({ page }) => {
@@ -67,7 +67,7 @@ test('M4: editing any member updates the whole fiber', async ({ page }) => {
   expect(await cellText(page, 5, 12)).toBe('renamed');
   expect(await cellText(page, 20, 12)).toBe('renamed');
   expect(await cellSource(page, 20, 12)).toBe('flat');
-  expect(await fiberCount(page)).toBe(1);
+  expect(await fiberCount(page)).toBe(2); // both seed fibers intact (one edited)
 
   expect(errors, errors.join('\n')).toHaveLength(0);
   await page.screenshot({ path: 'test-results/m4-fiber.png' });
@@ -80,7 +80,7 @@ test('M4: clearing a fibered cell removes the whole fiber', async ({ page }) => 
 
   expect(await cellSource(page, 5, 12)).toBe('empty');
   expect(await cellSource(page, 30, 12)).toBe('empty');
-  expect(await fiberCount(page)).toBe(0);
+  expect(await fiberCount(page)).toBe(1); // the literal fiber went; the formula fiber stays
 });
 
 test('M4: define a constant down a column through the dialog', async ({ page }) => {
@@ -99,7 +99,7 @@ test('M4: define a constant down a column through the dialog', async ({ page }) 
   expect(await cellText(page, 3, 15)).toBe('Header');
   expect(await cellText(page, 40, 15)).toBe('Header'); // constant down the column
   expect(await cellSource(page, 3, 15)).toBe('flat');
-  expect(await fiberCount(page)).toBe(2); // seed + the new one
+  expect(await fiberCount(page)).toBe(3); // two seed fibers + the new one
 });
 
 test('M4: the dialog reports an overlap and keeps the fiber count', async ({ page }) => {
@@ -113,7 +113,7 @@ test('M4: the dialog reports an overlap and keeps the fiber count', async ({ pag
 
   await expect(page.locator('.flat-dialog .error')).toBeVisible();
   await expect(page.locator('.flat-dialog')).toBeVisible(); // stays open
-  expect(await fiberCount(page)).toBe(1); // not created
+  expect(await fiberCount(page)).toBe(2); // unchanged: the two seed fibers
 });
 
 test('M4: covering explicit cells is rejected, then absorbed on overwrite', async ({ page }) => {
@@ -125,7 +125,7 @@ test('M4: covering explicit cells is rejected, then absorbed on overwrite', asyn
   expect(blocked.ok).toBe(false);
   expect(blocked.reason).toBe('explicit-collision');
   expect(blocked.count).toBeGreaterThan(0);
-  expect(await fiberCount(page)).toBe(1); // seed only — not created
+  expect(await fiberCount(page)).toBe(2); // two seed fibers — not created
 
   const absorbed = await page.evaluate(() =>
     window.__mai.defineFiber(['axis-row'], 'label', true),
@@ -134,5 +134,5 @@ test('M4: covering explicit cells is rejected, then absorbed on overwrite', asyn
   // The explicit "maimadion" was absorbed; the coordinate is now fibered.
   expect(await cellText(page, 1, 1)).toBe('label');
   expect(await cellSource(page, 1, 1)).toBe('flat');
-  expect(await fiberCount(page)).toBe(2);
+  expect(await fiberCount(page)).toBe(3);
 });

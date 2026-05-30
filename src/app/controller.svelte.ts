@@ -1,46 +1,33 @@
-// Shared interaction state for the grid (tech-design §12/§13/§16).
+// Top-level orchestration for the grid — the main-thread view/interaction layer that
+// composes three focused units (tech-design §10/§12/§16):
+//   - DocumentStore: the document truth + the discrete-op/undo seam + the computed cache
+//     (§10) — the unit the worker takes over in M9 (§11);
+//   - ViewState: the projection/binding/active-cell (§12);
+//   - EditState: the in-flight edit (§16).
+// Every write goes through the DocumentStore's op seam, so the M9 worker swap replaces
+// only that unit while the view/interaction layers — and the renderer's synchronous
+// reads — stay put. `rev` is the data-change repaint signal; `navVersion` (on ViewState)
+// the view-change one. Undo/redo replay the op log at logical-edit granularity; view-only
+// changes (navigate/rebind) never enter it (§10).
 //
-// Owns the active cell, the in-flight edit buffer, and — new in M3 — the reactive
-// viewport binding: which axes are on the visible row/column, and the navigated
-// position of every hidden axis. Rebinding or navigating never mutates data (§12):
-// it only changes which slice projects onto the screen, and the active cell follows
-// the screen. Two revision counters drive repaint/re-read: `rev` on data writes,
-// `navVersion` on view (binding/navigation) changes. Writes still go straight to the
-// in-memory sheet — the discrete-op + undo system (§10) and the worker-owned store
-// (§11) replace that in M7.
-//
-// M4 adds fibers: an edit on a fiber-covered cell edits the whole fiber, and the
-// FlatDialog defines new ones from the active cell (§9, §14). M5 adds formulas: a `=`
-// edit is parsed/expanded against the active coordinate (§5/§6) and stored; the
-// controller keeps the recomputed formula values (§7/§8) so the grid shows computed
-// results while the formula bar shows the elided source. M6 completes fibers: a fiber's
-// shared value may itself be a `=` formula (parsed the same way against the active
-// coordinate), computed once and shared, so editing a fibered cell or its dependencies
-// recomputes the whole fiber and everything reading it (§9).
+// This class is a thin facade: it preserves the public surface the Svelte components and
+// the e2e window API depend on, delegating each member to the unit that owns it.
 
-import type { AxisId, CellInput, Computed, Coord, Flat, Index, Sheet } from '../engine/types';
-import type { NodeId } from '../engine/depgraph';
 import { displayFormula } from '../engine/formula';
+import type { AxisId, CellInput, Coord, Flat, Index, Sheet } from '../engine/types';
 import { formatComputed } from '../engine/value';
-import { coordAt, type Projection } from '../grid/projection';
+import type { Projection } from '../grid/projection';
+import { DocumentStore } from '../model/document';
 import {
   type CellSource,
-  computedAt,
-  coordAddress,
-  createFlat,
   type CreateFlatResult,
+  coordAddress,
   displayValue,
-  editFlat,
-  findCoveringFlat,
   parseInput,
-  readCell,
-  readCellInput,
-  recomputeSheet,
-  removeFlat,
-  setCell,
 } from '../model/sheet';
+import { EditState, type EditSource } from './edit-state.svelte';
+import { ViewState } from './view-state.svelte';
 
-type EditSource = 'grid' | 'bar';
 type Move = 'down' | 'up' | 'right' | 'left';
 
 const MOVES: Record<Move, [number, number]> = {
@@ -50,259 +37,211 @@ const MOVES: Record<Move, [number, number]> = {
   left: [0, -1],
 };
 
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-
 export class SheetController {
-  readonly sheet: Sheet;
+  private readonly doc: DocumentStore;
+  private readonly view: ViewState;
+  private readonly edit: EditState;
 
-  activeRow = $state(1);
-  activeCol = $state(1);
-  editing = $state(false);
-  editSource = $state<EditSource>('grid');
-  editBuffer = $state('');
-  // Bumped on every data write; the renderer's $effect reads it to repaint, and
-  // derived views (formula bar) re-read the cell.
+  // Bumped on every data change (write / undo / redo); the renderer's $effect reads it to
+  // repaint and derived views (formula bar) re-read the cell. View changes signal via
+  // ViewState.navVersion instead.
   rev = $state(0);
-  // Computed formula values (session-only, §2), keyed by depgraph node — a formula
-  // cell's key or a formula fiber's id (§9) — refreshed on every data change. Plain
-  // field — repaint is driven by `rev`, not by this map being reactive.
-  private computed = new Map<NodeId, Computed>();
-
-  // The visible binding (§12). Reactive so rebinding re-projects the whole view.
-  rowAxisId = $state<AxisId>('');
-  colAxisId = $state<AxisId>('');
-  // Navigated index per axis, kept for every axis (the entry for a currently-visible
-  // axis is ignored by projection and reused if it later becomes hidden, so flipping
-  // an axis on/off the screen restores where you were). Plain Map + a reactive
-  // counter, mirroring the `rev` pattern; bumped on every navigate/rebind.
-  private readonly nav = new Map<AxisId, Index>();
-  navVersion = $state(0);
-
-  // Whether the "define a constant (fiber)" dialog is open (§14 FlatDialog).
-  flatDialogOpen = $state(false);
-
-  // Registered by the Grid so active-cell changes can scroll into view / refocus.
-  onEnsureVisible: (() => void) | undefined;
-  onGridFocus: (() => void) | undefined;
 
   constructor(sheet: Sheet) {
-    this.sheet = sheet;
-    const { activeCoord, rowAxisId, colAxisId, navigated } = sheet.viewport;
-    this.rowAxisId = rowAxisId;
-    this.colAxisId = colAxisId;
-    this.activeRow = activeCoord.get(rowAxisId) ?? 1;
-    this.activeCol = activeCoord.get(colAxisId) ?? 1;
-    for (const axis of sheet.axes) {
-      this.nav.set(axis.id, navigated.get(axis.id) ?? 1);
-    }
-    this.computed = recomputeSheet(this.sheet); // value the seed formulas
+    this.doc = new DocumentStore(sheet);
+    this.view = new ViewState(sheet.axes, sheet.viewport);
+    this.edit = new EditState();
   }
 
-  private axisOf(id: AxisId) {
-    const axis = this.sheet.axes.find((a) => a.id === id);
-    if (!axis) throw new Error(`axis not found: ${id}`);
-    return axis;
-  }
-  private clampToAxis(axisId: AxisId, index: number): Index {
-    return clamp(Math.round(index), 1, this.axisOf(axisId).positions.length);
+  get sheet(): Sheet {
+    return this.doc.sheet;
   }
 
+  // --- view / projection (ViewState) -------------------------------------------
+  get activeRow(): Index {
+    return this.view.activeRow;
+  }
+  get activeCol(): Index {
+    return this.view.activeCol;
+  }
+  get rowAxisId(): AxisId {
+    return this.view.rowAxisId;
+  }
+  get colAxisId(): AxisId {
+    return this.view.colAxisId;
+  }
+  get navVersion(): number {
+    return this.view.navVersion;
+  }
   get rowCount(): number {
-    return this.axisOf(this.rowAxisId).positions.length;
+    return this.view.rowCount;
   }
   get colCount(): number {
-    return this.axisOf(this.colAxisId).positions.length;
+    return this.view.colCount;
+  }
+  get onEnsureVisible(): (() => void) | undefined {
+    return this.view.onEnsureVisible;
+  }
+  set onEnsureVisible(fn: (() => void) | undefined) {
+    this.view.onEnsureVisible = fn;
+  }
+  get onGridFocus(): (() => void) | undefined {
+    return this.view.onGridFocus;
+  }
+  set onGridFocus(fn: (() => void) | undefined) {
+    this.view.onGridFocus = fn;
   }
 
-  /** The current visible binding + navigated positions (reactive to view changes). */
   projection(): Projection {
-    void this.navVersion; // make projection reads reactive to navigation
-    const navigated: Coord = new Map();
-    for (const [id, idx] of this.nav) navigated.set(id, idx);
-    return { rowAxisId: this.rowAxisId, colAxisId: this.colAxisId, navigated };
+    return this.view.projection();
   }
-  /** The navigated index on a hidden axis (reactive). */
   navigatedIndex(axisId: AxisId): Index {
-    void this.navVersion;
-    return this.nav.get(axisId) ?? 1;
+    return this.view.navigatedIndex(axisId);
+  }
+  activeCoord(): Coord {
+    return this.view.activeCoord();
   }
 
-  activeCoord(): Coord {
-    return coordAt(this.projection(), this.activeRow, this.activeCol);
+  // --- interaction / edit state (EditState) ------------------------------------
+  get editing(): boolean {
+    return this.edit.editing;
   }
+  get editSource(): EditSource {
+    return this.edit.editSource;
+  }
+  get editBuffer(): string {
+    return this.edit.editBuffer;
+  }
+  set editBuffer(v: string) {
+    this.edit.editBuffer = v;
+  }
+  get flatDialogOpen(): boolean {
+    return this.edit.flatDialogOpen;
+  }
+
+  // --- reads (reactive to data writes via rev) ---------------------------------
   activeInput(): CellInput {
-    void this.rev; // make reads reactive to writes inside an effect/derived
-    return readCellInput(this.sheet, this.activeCoord());
+    void this.rev;
+    return this.doc.cellInput(this.view.activeCoord());
   }
   /** What the formula bar shows/edits: a formula's elided source (§6), else the literal. */
   activeText(): string {
-    const input = this.activeInput();
-    if (input.kind === 'formula') {
-      return displayFormula(input, this.activeCoord(), this.sheet.axes);
-    }
+    const coord = this.view.activeCoord();
+    void this.rev;
+    const input = this.doc.cellInput(coord);
+    if (input.kind === 'formula') return displayFormula(input, coord, this.sheet.axes);
     return displayValue(input);
   }
   activeAddress(): string {
-    return coordAddress(this.sheet.axes, this.activeCoord());
+    return coordAddress(this.sheet.axes, this.view.activeCoord());
   }
-
   /** What a grid cell shows: the computed value, plus its source for the fiber tint (§13). */
   cellDisplay(coord: Coord): { text: string; source: CellSource } {
     void this.rev;
     return {
-      text: formatComputed(computedAt(this.sheet, this.computed, coord)),
-      source: readCell(this.sheet, coord).source,
+      text: formatComputed(this.doc.computedAt(coord)),
+      source: this.doc.cellRead(coord).source,
     };
   }
 
-  /**
-   * Push the reactive view state back onto sheet.viewport so the persisted/worker
-   * truth (§§10–11, §15) stays accurate even while the controller is the live
-   * source. View-only ops are persisted but never enter the undo log (§10).
-   */
-  private syncViewport(): void {
-    const v = this.sheet.viewport;
-    v.rowAxisId = this.rowAxisId;
-    v.colAxisId = this.colAxisId;
-    v.navigated = this.projection().navigated;
-    v.activeCoord = this.activeCoord();
-    v.selection = { kind: 'single', coord: new Map(v.activeCoord) };
-  }
-
-  /** Move the active cell to a 1-based (row, col), clamped to the sheet. */
+  // --- selection / movement (view) ---------------------------------------------
   select(row: Index, col: Index): void {
-    this.activeRow = clamp(Math.round(row), 1, this.rowCount);
-    this.activeCol = clamp(Math.round(col), 1, this.colCount);
-    this.syncViewport();
-    this.onEnsureVisible?.();
+    this.view.select(row, col);
   }
   moveBy(dRow: number, dCol: number): void {
-    this.select(this.activeRow + dRow, this.activeCol + dCol);
+    this.view.moveBy(dRow, dCol);
   }
   home(): void {
-    this.select(this.activeRow, 1);
+    this.view.home();
   }
   end(): void {
-    this.select(this.activeRow, this.colCount);
+    this.view.end();
   }
 
-  /**
-   * Navigate a hidden axis to a position (§12). The active cell stays on its screen
-   * (row, col); only the slice behind it changes. Commits any in-flight edit first
-   * (§16) so it lands on the cell being edited, not the new slice.
-   */
+  // --- navigation / binding (commit any in-flight edit first, §16) -------------
   navigate(axisId: AxisId, index: number): void {
-    if (this.editing) this.commitBuffer();
-    this.nav.set(axisId, this.clampToAxis(axisId, index));
-    this.navVersion++;
-    this.syncViewport();
+    this.commitIfEditing();
+    this.view.navigate(axisId, index);
   }
-
-  /**
-   * Bind the visible row/column axes (§12, §14). Axes must stay distinct. The active
-   * cell follows the screen: its (row, col) are kept (clamped to the new axes). Any
-   * axis pushed off-screen navigates to the position the active cell had on it, so
-   * the visible slice still contains where you were.
-   */
   rebind(rowAxisId: AxisId, colAxisId: AxisId): void {
-    if (rowAxisId === colAxisId) return;
-    if (this.editing) this.commitBuffer();
-    const prev = this.activeCoord(); // full coord before the rebind
-    this.rowAxisId = rowAxisId;
-    this.colAxisId = colAxisId;
-    for (const axis of this.sheet.axes) {
-      if (axis.id === rowAxisId || axis.id === colAxisId) continue;
-      const at = prev.get(axis.id);
-      if (at !== undefined) this.nav.set(axis.id, this.clampToAxis(axis.id, at));
-    }
-    this.navVersion++;
-    this.activeRow = clamp(this.activeRow, 1, this.rowCount);
-    this.activeCol = clamp(this.activeCol, 1, this.colCount);
-    this.syncViewport();
-    this.onEnsureVisible?.();
-    this.onGridFocus?.();
+    this.commitIfEditing();
+    this.view.rebind(rowAxisId, colAxisId);
   }
-  /** Swap the row and column axes (§14). */
   swap(): void {
-    this.rebind(this.colAxisId, this.rowAxisId);
+    this.commitIfEditing();
+    this.view.swap();
   }
 
+  // --- editing -----------------------------------------------------------------
   beginEdit(initial?: string, source: EditSource = 'grid'): void {
-    this.editBuffer = initial ?? this.activeText();
-    this.editSource = source;
-    this.editing = true;
+    this.edit.begin(initial ?? this.activeText(), source);
   }
   cancelEdit(): void {
-    this.editing = false;
-    this.onGridFocus?.();
-  }
-  /**
-   * Write a value to a coordinate (§16). If the coordinate is covered by a fiber, the
-   * write edits the *whole fiber* — a non-empty value changes the shared value (every
-   * covered cell updates at once), an empty value removes the fiber. This is why
-   * editing any member updates the whole fiber, and why a per-cell explicit override
-   * of a fibered coordinate can't be created (a non-goal, §9). Otherwise it's an
-   * ordinary explicit-cell write.
-   */
-  private write(coord: Coord, input: CellInput): void {
-    const flat = findCoveringFlat(this.sheet, coord);
-    if (flat) {
-      if (input.kind === 'empty') removeFlat(this.sheet, flat.id);
-      else editFlat(this.sheet, flat.id, input);
-    } else {
-      setCell(this.sheet, coord, input);
-    }
-    this.afterDataChange();
-  }
-
-  /** Recompute formula values and trigger a repaint after any data change. */
-  private afterDataChange(): void {
-    this.computed = recomputeSheet(this.sheet);
-    this.rev++;
-  }
-
-  /**
-   * Write the edit buffer to the active cell and leave edit mode (no focus move). A `=`
-   * buffer parses as a formula expanded against the active coordinate (§5/§6); this is
-   * the same whether the cell is plain or fibered — since M6 a fiber's shared value may
-   * be a formula too (it routes through {@link write} → editFlat, §9).
-   */
-  private commitBuffer(): void {
-    const coord = this.activeCoord();
-    const input = parseInput(this.editBuffer, coord, this.sheet.axes);
-    this.write(coord, input);
-    this.editing = false;
+    this.edit.finish();
+    this.view.onGridFocus?.();
   }
   commitEdit(move?: Move): void {
     this.commitBuffer();
-    if (move) this.moveBy(...MOVES[move]);
-    this.onGridFocus?.();
+    if (move) this.view.moveBy(...MOVES[move]);
+    this.view.onGridFocus?.();
   }
   /** Delete/Backspace on a selected cell: clear it without entering edit mode. */
   clearActive(): void {
-    this.write(this.activeCoord(), { kind: 'empty' });
+    this.applyWrite(this.view.activeCoord(), { kind: 'empty' });
   }
 
-  // --- Fibers (§9, §14) ---------------------------------------------------------
+  private commitIfEditing(): void {
+    if (this.edit.editing) this.commitBuffer();
+  }
+  /**
+   * Write the edit buffer to the active cell and leave edit mode (no focus move). A `=`
+   * buffer parses as a formula expanded against the active coordinate (§5/§6); whether
+   * the cell is plain or fibered is handled by the document's setCellAt (§9, §16).
+   */
+  private commitBuffer(): void {
+    const coord = this.view.activeCoord();
+    const input = parseInput(this.edit.editBuffer, coord, this.sheet.axes);
+    this.applyWrite(coord, input);
+    this.edit.finish();
+  }
+  private applyWrite(coord: Coord, input: CellInput): void {
+    this.doc.setCellAt(coord, input);
+    this.rev++;
+  }
 
+  // --- undo / redo (data-op granularity, §10) ----------------------------------
+  get canUndo(): boolean {
+    return this.doc.canUndo;
+  }
+  get canRedo(): boolean {
+    return this.doc.canRedo;
+  }
+  undo(): void {
+    if (this.doc.undo()) this.rev++;
+  }
+  redo(): void {
+    if (this.doc.redo()) this.rev++;
+  }
+
+  // --- fibers (§9, §14) --------------------------------------------------------
   openFlatDialog(): void {
-    this.flatDialogOpen = true;
+    this.edit.openDialog();
   }
   closeFlatDialog(): void {
-    this.flatDialogOpen = false;
-    this.onGridFocus?.();
+    this.edit.closeDialog();
+    this.view.onGridFocus?.();
   }
 
   /**
    * Define a fiber from the active cell: every axis is pinned to the active cell's
-   * current index except those in `freeAxisIds`, which the fiber spans whole. The
-   * shared value is `raw` — a literal, or (since M6) a `=` formula expanded against the
-   * active coordinate (§9). Returns the §9 invariant result so the dialog can surface an
-   * overlap or offer to absorb colliding explicit cells (`absorb`).
+   * current index except those in `freeAxisIds`, which the fiber spans whole. The shared
+   * value is `raw` — a literal, or a `=` formula expanded against the active coordinate
+   * (§9). Returns the §9 invariant result so the dialog can surface an overlap or offer
+   * to absorb colliding explicit cells (`absorb`).
    */
   createFiber(freeAxisIds: AxisId[], raw: string, absorb = false): CreateFlatResult {
-    if (this.editing) this.commitBuffer();
-    const coord = this.activeCoord();
+    this.commitIfEditing();
+    const coord = this.view.activeCoord();
     const pins = new Map<AxisId, Index>();
     const free = new Set<AxisId>();
     for (const axis of this.sheet.axes) {
@@ -311,11 +250,11 @@ export class SheetController {
     }
     const input = parseInput(raw, coord, this.sheet.axes);
     const flat: Flat = { id: crypto.randomUUID(), pins, free, input };
-    const result = createFlat(this.sheet, flat, { absorb });
+    const result = this.doc.createFlat(flat, { absorb });
     if (result.ok) {
-      this.afterDataChange();
-      this.flatDialogOpen = false;
-      this.onGridFocus?.();
+      this.rev++;
+      this.edit.closeDialog();
+      this.view.onGridFocus?.();
     }
     return result;
   }

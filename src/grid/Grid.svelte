@@ -131,6 +131,9 @@
     else if (k === 'End') controller.end();
     else if (k === 'F2') controller.beginEdit();
     else if (k === 'Backspace' || k === 'Delete') controller.clearActive();
+    else if ((e.metaKey || e.ctrlKey) && (k === 'z' || k === 'Z'))
+      e.shiftKey ? controller.redo() : controller.undo();
+    else if ((e.metaKey || e.ctrlKey) && (k === 'y' || k === 'Y')) controller.redo();
     else if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) controller.beginEdit(k);
     else return; // let the browser handle anything else
     e.preventDefault();

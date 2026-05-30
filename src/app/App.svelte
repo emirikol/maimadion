@@ -19,6 +19,10 @@
     }),
   );
 
+  // Re-read undo availability whenever the data changes (rev is the §10 edit signal).
+  const canUndo = $derived((void controller.rev, controller.canUndo));
+  const canRedo = $derived((void controller.rev, controller.canRedo));
+
   interface MaiTestApi {
     active(): { row: number; col: number };
     select(row: number, col: number): void;
@@ -31,6 +35,10 @@
     binding(): { row: string; col: string };
     axes(): { id: string; name: string; count: number }[];
     fiberCount(): number;
+    undo(): void;
+    redo(): void;
+    canUndo(): boolean;
+    canRedo(): boolean;
     defineFiber(
       freeAxisIds: string[],
       raw: string,
@@ -63,6 +71,10 @@
           ? { ok: true, count: 0 }
           : { ok: false, reason: r.reason, count: r.reason === 'explicit-collision' ? r.keys.length : 0 };
       },
+      undo: () => controller.undo(),
+      redo: () => controller.redo(),
+      canUndo: () => controller.canUndo,
+      canRedo: () => controller.canRedo,
     };
   });
 </script>
@@ -70,11 +82,15 @@
 <div class="app">
   <header>
     <h1>maimadion</h1>
-    <span>M6 — fibers complete</span>
+    <span>M7 — operations &amp; undo</span>
   </header>
   <FormulaBar {controller} />
   <div class="view-controls">
     <AxisBindingControl {controller} />
+    <div class="edit-controls">
+      <button type="button" onclick={() => controller.undo()} disabled={!canUndo}>Undo</button>
+      <button type="button" onclick={() => controller.redo()} disabled={!canRedo}>Redo</button>
+    </div>
     {#each hidden as axis (axis.id)}
       <Slider {controller} {axis} />
     {/each}
@@ -126,6 +142,25 @@
     border-bottom: 1px solid #ddd;
     background: #fafafa;
     font-size: 13px;
+  }
+  .edit-controls {
+    display: flex;
+    gap: 6px;
+  }
+  .edit-controls button {
+    font: inherit;
+    padding: 2px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+  }
+  .edit-controls button:disabled {
+    color: #bbb;
+    cursor: default;
+  }
+  .edit-controls button:not(:disabled):hover {
+    background: #f0f0f0;
   }
   .define-constant {
     margin-left: auto;

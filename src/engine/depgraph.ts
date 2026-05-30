@@ -3,7 +3,7 @@
 // A *full* recompute: rebuild the formula→formula edges, evaluate in topological
 // order, and mark every node in (or downstream of) a cycle #CYCLE! — never hang
 // (requirements AC §4.7). The incremental, range-descriptor-driven dirtying of §8 is
-// the worker's job and lands in M7; this clear placeholder gives correct "recompute
+// the worker's job and lands in M9; this clear placeholder gives correct "recompute
 // on edit" for the in-memory slice.
 //
 // A *node* is any formula-bearing thing: an explicit formula cell or a formula-valued

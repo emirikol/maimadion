@@ -3,9 +3,9 @@
 // Stays DOM-free (this is destined for the worker later). The read path is the
 // order-free resolution chain of §9: explicit cell → covering fiber → empty. A fiber
 // `input` may be a literal or — since M6 — a formula, computed once and shared across
-// the whole fiber as a single depgraph node (§9). The writes here are still direct
-// mutations (placeholder for the §10 discrete-op + undo system and the §11
-// worker-owned store, both M7).
+// the whole fiber as a single depgraph node (§9). The mutators here (setCell/editFlat/
+// removeFlat) are the low-level writes the discrete-op seam applies (model/ops.ts, §10);
+// the §11 worker-owned store takes over the document in M9.
 
 import { axisLetter, decodeCellKey, encodeCellKey } from '../engine/coord';
 import { type NodeId, recompute } from '../engine/depgraph';
@@ -101,9 +101,10 @@ export function parseInput(raw: string, context: Coord, axes: Axis[]): CellInput
 }
 
 /**
- * M2 placeholder write: mutate the in-memory cell store directly. The real
- * discrete-op + undo system (§10) and the worker-owned store (§11) replace this
- * in M7. Writing `empty` deletes the key so the store stays sparse.
+ * The low-level explicit-cell write: mutate the in-memory cell store directly. Since M7
+ * this runs underneath the discrete-op seam (the `apply` of a SetCell op, §10); the
+ * worker-owned store (§11) takes over in M9. Writing `empty` deletes the key so the
+ * store stays sparse.
  */
 export function setCell(sheet: Sheet, coord: Coord, input: CellInput): void {
   const key = coordToCellKey(sheet.axes, coord);
@@ -143,7 +144,9 @@ export type CreateFlatResult =
  *  - overlapping an existing fiber is always rejected (no override);
  *  - covering existing explicit cells is rejected unless `absorb` is set, in which
  *    case those explicit cells are deleted and the fiber's value wins.
- * Placeholder for the §10 `CreateFlat` op (M7); on success the fiber is appended.
+ * The app routes fiber creation through the §10 `CreateFlat` op (model/document.ts),
+ * which captures the absorbed cells so undo restores them; this direct mutator, which
+ * shares the same §9 checks, stays for unit tests. On success the fiber is appended.
  */
 export function createFlat(
   sheet: Sheet,
@@ -219,7 +222,7 @@ function staticValueAt(sheet: Sheet, key: CellKey): Computed {
 /**
  * Evaluate every formula in the sheet — explicit formula cells *and* formula-valued
  * fibers (§9) — returning their computed values keyed by node id (session-only, §2). A
- * full recompute, the placeholder for §8's incremental, worker-owned recompute (M7).
+ * full recompute, the placeholder for §8's incremental, worker-owned recompute (M9).
  * Each formula-valued fiber is a single node: it is computed once and read by every
  * formula that touches its covered region (§9). Nodes in or downstream of a cycle
  * resolve to #CYCLE!.

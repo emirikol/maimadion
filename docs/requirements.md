@@ -86,7 +86,7 @@ Each capability is marked **[v1]**, **[v1.1]**, or **[deferred]**.
 | Copy / cut / paste of cells and 1-D ranges (in-app) | v1 |
 | Relative/absolute reference adjustment on paste | v1 |
 | Undo / redo at logical-edit granularity | v1 |
-| Constant fill (incl. slider-drag fill across a dimension) | v1 |
+| Slider-drag fill (copies values across cells along a dimension) | v1 |
 | Automatic recalculation on every edit | v1 |
 | Dependency-ordered recompute | v1 |
 | In-cell error indicators | v1 |

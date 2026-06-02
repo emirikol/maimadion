@@ -192,8 +192,12 @@ never by both a fiber and an explicit value. Cell read resolution is therefore
 read(coord) = explicit value, else the unique covering fiber, else empty
 ```
 
-Carving a per-cell exception inside a fiber (one rogue cell that differs) is
-intentionally out of scope for v1.
+Fine-grained exceptions to a fiber (one cell that differs from the rest) are
+deliberately **not** a fiber concern at all — they are the domain of a separate,
+future **n-dimensional constant-fill tool**, which addresses the
+mostly-constant-with-overrides scenario. Fibers and that tool are two distinct
+mechanisms for nearby but different cases; fiber semantics are not weakened to
+absorb the override case.
 
 ---
 

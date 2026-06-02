@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { SheetController } from '../app/controller.svelte';
-  import { contentSize, LAYOUT, render } from './render';
+  import { cellRect, LAYOUT, layoutAt } from './layout';
+  import { cellAt } from './hitTest';
+  import { contentSize, render } from './render';
 
   let { controller }: { controller: SheetController } = $props();
 
@@ -21,13 +23,8 @@
 
   // The active cell's screen rect (CSS px, relative to .grid) — positions the editor.
   const editorRect = $derived.by(() => {
-    const { rowH, colW, headerW, headerH } = LAYOUT;
-    return {
-      left: headerW + (controller.activeCol - 1) * colW - scrollLeft,
-      top: headerH + (controller.activeRow - 1) * rowH - scrollTop,
-      width: colW,
-      height: rowH,
-    };
+    const r = cellRect(layoutAt(scrollLeft, scrollTop), controller.activeRow - 1, controller.activeCol - 1);
+    return { left: r.x, top: r.y, width: r.w, height: r.h };
   });
 
   function paint() {
@@ -105,16 +102,17 @@
 
   function onPointerDown(e: PointerEvent) {
     if (editorEl && e.target === editorEl) return; // caret placement inside the editor
-    const { rowH, colW, headerW, headerH } = LAYOUT;
     const rect = viewport.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    if (px < headerW || py < headerH) return; // gutter/corner: no selection in M2
-    const c = Math.floor((px - headerW + scrollLeft) / colW);
-    const r = Math.floor((py - headerH + scrollTop) / rowH);
-    if (r < 0 || c < 0 || r >= controller.rowCount || c >= controller.colCount) return;
+    const cell = cellAt(
+      layoutAt(scrollLeft, scrollTop),
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+      controller.rowCount,
+      controller.colCount,
+    );
+    if (!cell) return; // gutter/corner or past the last cell: no selection
     if (controller.editing) controller.commitEdit();
-    controller.select(r + 1, c + 1);
+    controller.select(cell.row + 1, cell.col + 1);
     viewport.focus();
   }
 

@@ -216,6 +216,14 @@ change):
 done before the next M-feature lands so that feature builds on the new seams
 rather than against them.
 
+**Status — implemented.** Done on `claude/refactor-render`. `render.ts` is now
+frame-setup + a pass pipeline; the coordinate model lives in `layout.ts` (inverse
+in `hitTest.ts`), windowing in `geometry.ts`, primitives in `types.ts` / `theme.ts`
+/ `draw.ts`, and each draw layer in `passes.ts`. All ten smells closed; the five
+pass functions live in one `passes.ts` rather than a `passes/` directory (one
+function per layer gives the same per-feature isolation at this size). No behaviour
+change: full unit + e2e suites green and a visual check confirms identical output.
+
 ---
 
 ### Project-process evaluation
